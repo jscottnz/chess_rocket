@@ -47,8 +47,12 @@
     margin: 0 auto;
   }
   .board-col { display: flex; flex-direction: column; gap: 12px; }
-  .board-wrapper { width: 100%; aspect-ratio: 1; }
+  .board-wrapper { width: 100%; aspect-ratio: 1; position: relative; }
   #board { width: 100% !important; height: auto !important; }
+  .board-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+  .overlay-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .85); stroke-width: .06; }
+  .overlay-arrow { stroke: #e94560; stroke-width: .12; stroke-linecap: round; opacity: .92; }
+  .overlay-label { fill: white; font-size: .34px; font-weight: 700; paint-order: stroke; stroke: #16213e; stroke-width: .04px; }
   .board-info {
     display: flex; justify-content: space-between;
     font-size: 0.85rem; color: var(--text-dim);
@@ -131,6 +135,25 @@
     color: var(--text-dim); font-size: 1.1rem;
   }
   .waiting .pulse { animation: pulse 2s infinite; }
+  .setup { margin: 24px auto; max-width: 420px; background: var(--surface); padding: 22px; border-radius: 10px; text-align: left; }
+  .setup h2 { margin-bottom: 14px; font-size: 1.05rem; }
+  .setup-row { display: flex; gap: 10px; margin-bottom: 12px; }
+  .setup label { flex: 1; color: var(--text-dim); font-size: .82rem; }
+  .setup select, .setup input, .chat-input { width: 100%; margin-top: 5px; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); }
+  button { cursor: pointer; border: 0; border-radius: 5px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 600; }
+  button:disabled { opacity: .55; cursor: wait; }
+  .chat-panel { display: flex; flex-direction: column; min-height: 260px; }
+  .chat-messages { flex: 1; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .chat-message { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; font-size: .88rem; line-height: 1.4; }
+  .chat-message.user { background: var(--surface2); align-self: flex-end; max-width: 88%; }
+  .chat-message.assistant { background: #202b4a; align-self: flex-start; max-width: 94%; }
+  .chat-form { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-form .chat-input { flex: 1; resize: vertical; min-height: 38px; }
+  .move-pending { opacity: .6; pointer-events: none; }
+  .lesson-controls { display: none; align-items: center; gap: 8px; margin-top: 10px; font-size: .8rem; color: var(--text-dim); }
+  .lesson-controls.visible { display: flex; }
+  .lesson-controls button { padding: 5px 9px; font-size: .75rem; }
+  #lesson-title { flex: 1; }
   @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; }
@@ -150,15 +173,32 @@
 
 <div class="main" id="main-content">
   <div class="waiting" id="waiting">
-    <p class="pulse">Waiting for game...</p>
-    <p style="margin-top:12px;font-size:0.85rem">Start a game via Claude Code to see the board.</p>
+    <p class="pulse">Chess Rocket Tutor</p>
+    <div class="setup">
+      <h2>Start a coached game</h2>
+      <div class="setup-row">
+        <label>Play as
+          <select id="setup-color"><option value="white">White</option><option value="black">Black</option></select>
+        </label>
+        <label>Coach strength
+          <input id="setup-elo" type="number" min="100" max="3500" step="50" value="800">
+        </label>
+      </div>
+      <button id="start-game" type="button">Start game</button>
+    </div>
   </div>
 </div>
 
 <!-- Game layout (hidden until game data arrives) -->
 <template id="game-template">
   <div class="board-col">
-    <div class="board-wrapper"><div id="board"></div></div>
+    <div class="board-wrapper">
+      <div id="board"></div>
+      <svg id="board-overlay" class="board-overlay" viewBox="0 0 8 8" aria-hidden="true">
+        <defs><marker id="arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#e94560"></path></marker></defs>
+        <g id="overlay-drawing"></g>
+      </svg>
+    </div>
     <div class="board-info">
       <span id="player-info">Playing as: White</span>
       <span id="engine-info">Engine: 800 Elo</span>
@@ -220,6 +260,21 @@
       <div class="game-over-result" id="game-over-result"></div>
       <div class="game-over-details" id="game-over-details"></div>
     </div>
+    <div class="panel chat-panel" style="border-left-color: var(--accent);">
+      <h2>Coach</h2>
+      <div class="chat-messages" id="chat-messages"></div>
+      <form class="chat-form" id="chat-form">
+        <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask about the position..."></textarea>
+        <button type="submit" id="chat-send">Send</button>
+      </form>
+      <div class="lesson-controls" id="lesson-controls">
+        <button type="button" id="lesson-prev">←</button>
+        <button type="button" id="lesson-play">Play</button>
+        <button type="button" id="lesson-next">→</button>
+        <span id="lesson-title"></span>
+        <span id="lesson-count"></span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -246,6 +301,10 @@
   let board = null;
   let lastFen = null;
   let gameActive = false;
+  let movePending = false;
+  let currentLesson = null;
+  let lessonIndex = 0;
+  let lessonTimer = null;
 
   function initBoard(orientation) {
     const main = document.getElementById('main-content');
@@ -255,11 +314,145 @@
     board = Chessboard('board', {
       position: 'start',
       orientation: orientation || 'white',
-      draggable: false,
+      draggable: true,
+      onDrop: handleDrop,
       pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
     });
     window.addEventListener('resize', () => board.resize());
     gameActive = true;
+    document.getElementById('chat-form').addEventListener('submit', sendChat);
+    document.getElementById('lesson-prev').addEventListener('click', () => showLessonMove(lessonIndex - 1));
+    document.getElementById('lesson-next').addEventListener('click', () => showLessonMove(lessonIndex + 1));
+    document.getElementById('lesson-play').addEventListener('click', playLesson);
+  }
+
+  async function api(path, body) {
+    const response = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : {'Content-Type': 'application/json'},
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) throw new Error(result.error || 'Request failed');
+    return result;
+  }
+
+  function renderState(state) {
+    if (!state || !state.fen) return;
+    if (!gameActive) initBoard(state.player_color || 'white');
+    if (state.fen !== lastFen) { board.position(state.fen, true); lastFen = state.fen; }
+    const expectedOrientation = state.player_color === 'black' ? 'black' : 'white';
+    if (board.orientation() !== expectedOrientation) board.orientation(expectedOrientation);
+    updatePanels(state);
+  }
+
+  function addChat(role, text) {
+    const messages = document.getElementById('chat-messages');
+    if (!messages || !text) return;
+    const el = document.createElement('div');
+    el.className = 'chat-message ' + role;
+    el.textContent = text;
+    messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function setLesson(lesson) {
+    currentLesson = lesson && lesson.demo_moves && lesson.demo_moves.length ? lesson : null;
+    lessonIndex = 0;
+    document.getElementById('lesson-controls').classList.toggle('visible', !!currentLesson);
+    if (currentLesson) {
+      document.getElementById('lesson-title').textContent = currentLesson.demo_title || 'Suggested line';
+      showLessonMove(0);
+    } else {
+      document.getElementById('overlay-drawing').innerHTML = '';
+    }
+  }
+
+  function squarePoint(square, orientation) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = Number(square[1]) - 1;
+    return orientation === 'black' ? {x: 7 - file + .5, y: rank + .5} : {x: file + .5, y: 7 - rank + .5};
+  }
+
+  function showLessonMove(index) {
+    if (!currentLesson) return;
+    lessonIndex = Math.max(0, Math.min(index, currentLesson.demo_moves.length - 1));
+    const move = currentLesson.demo_moves[lessonIndex];
+    const from = squarePoint(move.from, board.orientation());
+    const to = squarePoint(move.to, board.orientation());
+    document.getElementById('overlay-drawing').innerHTML =
+      `<rect class="overlay-square" x="${from.x - .5}" y="${from.y - .5}" width="1" height="1"></rect>` +
+      `<rect class="overlay-square" x="${to.x - .5}" y="${to.y - .5}" width="1" height="1"></rect>` +
+      `<line class="overlay-arrow" marker-end="url(#arrow-head)" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"></line>` +
+      `<text class="overlay-label" x="${to.x - .12}" y="${to.y + .12}">${esc(move.san)}</text>`;
+    document.getElementById('lesson-count').textContent = `${lessonIndex + 1}/${currentLesson.demo_moves.length}`;
+  }
+
+  function playLesson() {
+    if (!currentLesson) return;
+    if (lessonTimer) {
+      clearInterval(lessonTimer); lessonTimer = null;
+      document.getElementById('lesson-play').textContent = 'Play';
+      return;
+    }
+    document.getElementById('lesson-play').textContent = 'Pause';
+    lessonTimer = setInterval(() => {
+      if (lessonIndex >= currentLesson.demo_moves.length - 1) {
+        clearInterval(lessonTimer); lessonTimer = null;
+        document.getElementById('lesson-play').textContent = 'Play';
+      } else showLessonMove(lessonIndex + 1);
+    }, 1200);
+  }
+
+  function handleDrop(source, target) {
+    if (movePending) return 'snapback';
+    movePending = true;
+    document.getElementById('board').classList.add('move-pending');
+    api('/api/game/move', {move: source + target}).then(result => {
+      renderState(result.state);
+      addChat('assistant', result.reply);
+      setLesson(result.lesson);
+    }).catch(error => addChat('assistant', error.message)).finally(() => {
+      movePending = false;
+      document.getElementById('board').classList.remove('move-pending');
+    });
+    // The server is authoritative; wait for its response before displaying the move.
+    return 'snapback';
+  }
+
+  async function sendChat(event) {
+    event.preventDefault();
+    const input = document.getElementById('chat-input');
+    const button = document.getElementById('chat-send');
+    const message = input.value.trim();
+    if (!message || movePending) return;
+    input.value = '';
+    addChat('user', message);
+    button.disabled = true;
+    try {
+      const result = await api('/api/chat', {message});
+      addChat('assistant', result.reply);
+      setLesson(result.lesson);
+      renderState(result.state);
+    } catch (error) { addChat('assistant', error.message); }
+    finally { button.disabled = false; input.focus(); }
+  }
+
+  async function startGame() {
+    const button = document.getElementById('start-game');
+    button.disabled = true;
+    try {
+      const result = await api('/api/game/new', {
+        player_color: document.getElementById('setup-color').value,
+        target_elo: Number(document.getElementById('setup-elo').value) || 800,
+      });
+      renderState(result.state);
+      addChat('assistant', 'I\'m ready. Make your first move, or ask me anything about the position.');
+      if (result.state.player_color === 'black') {
+        const move = await api('/api/game/engine-move').catch(() => null);
+        if (move) renderState(move.state);
+      }
+    } catch (error) { addChat('assistant', error.message); button.disabled = false; }
   }
 
   function capturedToUnicode(pieces, color) {
@@ -424,30 +617,14 @@
       const resp = await fetch('/api/game');
       if (!resp.ok) return;
       const state = await resp.json();
-      if (!state || !state.fen) return;
-
-      if (!gameActive) {
-        initBoard(state.player_color || 'white');
-      }
-
-      if (state.fen !== lastFen) {
-        board.position(state.fen, true);
-        lastFen = state.fen;
-      }
-
-      // Check orientation
-      const expectedOrientation = state.player_color === 'black' ? 'black' : 'white';
-      if (board.orientation() !== expectedOrientation) {
-        board.orientation(expectedOrientation);
-      }
-
-      updatePanels(state);
+      if (state && state.fen) renderState(state);
     } catch (e) {
       // Server might be down, just retry
     }
   }
 
   setInterval(poll, 500);
+  document.getElementById('start-game').addEventListener('click', startGame);
   poll();
 })();
 </script>

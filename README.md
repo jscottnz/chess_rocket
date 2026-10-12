@@ -2,7 +2,7 @@
 
 ![Chess Rocket Banner](assets/hero-banner.png)
 
-An adaptive chess tutoring system powered by Claude Code that transforms into a personalized chess coach. Combines Stockfish engine analysis with educational psychology to guide learners from beginner (0 Elo) to intermediate (1500 Elo) through structured play, analysis, and spaced repetition.
+An adaptive chess tutoring system powered by Codex that transforms into a personalized chess coach. Combines Stockfish engine analysis with educational psychology to guide learners from beginner (0 Elo) to intermediate (1500 Elo) through structured play, analysis, and spaced repetition.
 
 **Status:** Python 3.10+ | Stockfish Engine | FastMCP | SQLite | Web Dashboard
 
@@ -10,9 +10,9 @@ An adaptive chess tutoring system powered by Claude Code that transforms into a 
 
 ---
 
-## TL;DR — Let Claude Code Set It Up For You
+## TL;DR — Let Codex Set It Up For You
 
-Copy-paste this into Claude Code and it will clone, install, and verify everything works:
+Copy-paste this into Codex and it will clone, install, and verify everything works:
 
 ```
 Clone https://github.com/suvojit-0x55aa/chess_rocket, install all dependencies (uv, Stockfish, Python packages), configure the MCP server, and run a quick smoke test to confirm the chess engine and MCP tools are working.
@@ -24,10 +24,10 @@ Clone https://github.com/suvojit-0x55aa/chess_rocket, install all dependencies (
 
 Chess Rocket works as a complete learning ecosystem:
 
-1. **Claude Code** connects via MCP (Model Context Protocol) to a chess server
+1. **Codex** connects via MCP (Model Context Protocol) to a chess server
 2. **MCP Server** manages 17+ tools for games, analysis, openings, and progress tracking
 3. **Stockfish** engine provides position evaluation and engine play
-4. **Web Dashboard** displays the live board, moves, evaluation, and opening info in your browser
+4. **Web Dashboard** is a standalone coached chess client with a draggable board and chat
 5. **Spaced Repetition (SM-2)** automatically schedules mistake review for long-term retention
 
 The system implements a **3-perspective tutor**: GM Teacher (strategy), Learning Psychologist (pacing), and Behavioral Specialist (motivation).
@@ -40,7 +40,7 @@ The system implements a **3-perspective tutor**: GM Teacher (strategy), Learning
 
 ### Teaching Methodology
 
-Claude acts as a **3-perspective tutor**:
+Codex acts as a **3-perspective tutor**:
 
 | Role | Function |
 |------|----------|
@@ -50,10 +50,10 @@ Claude acts as a **3-perspective tutor**:
 
 ### Core Loop: Play -> Analyze -> Teach -> Replay -> Plan
 
-1. **Play**: You move. Claude evaluates with `evaluate_move()` before responding with engine move.
-2. **Analyze**: Claude compares your choice to engine's top moves using `analyze_position()`.
+1. **Play**: You move. Codex evaluates with `evaluate_move()` before responding with engine move.
+2. **Analyze**: Codex compares your choice to engine's top moves using `analyze_position()`.
 3. **Teach**: Response depth depends on move quality (see thresholds below).
-4. **Replay**: After game, Claude walks through 2-3 teaching positions.
+4. **Replay**: After game, Codex walks through 2-3 teaching positions.
 5. **Plan**: Session summary + lesson plan + next session goals.
 
 ### Move Evaluation Thresholds
@@ -69,7 +69,7 @@ Claude acts as a **3-perspective tutor**:
 
 ### Language Adaptation
 
-Claude adjusts explanation depth to your level:
+Codex adjusts explanation depth to your level:
 
 | Level | Elo Range | Approach |
 |-------|-----------|----------|
@@ -142,7 +142,8 @@ Claude adjusts explanation depth to your level:
 | `from-games.json` | Mistakes from player games | 46 | Game mining |
 
 ### Web Dashboard
-- Interactive chess board with piece images
+- Standalone interactive chess board with draggable pieces
+- In-dashboard AI coaching chat
 - Move list with move numbers
 - Evaluation bar (position assessment)
 - Current opening name + ECO code
@@ -192,11 +193,10 @@ chess_rocket/
 +-- puzzles/                   # 284 curated puzzles (9 files)
 +-- tests/                     # Test suites
 +-- data/                      # Runtime data (generated, gitignored)
-+-- CLAUDE.md                  # Tutor agent instructions
-+-- SKILL.md                   # Claude Code skill documentation
++-- AGENTS.md                  # Codex tutor instructions
++-- .codex/config.toml         # Project-local Codex MCP configuration
 +-- LICENSE                    # GPL v3
 +-- pyproject.toml             # Python project config (uv)
-+-- .mcp.json                  # MCP server config (edit path before use)
 +-- README.md
 ```
 
@@ -208,7 +208,7 @@ chess_rocket/
 - Python 3.10 or later
 - Stockfish chess engine
 - uv package manager
-- Claude Code (with MCP support)
+- Codex (with MCP support)
 
 ### Installation
 
@@ -228,38 +228,34 @@ The install script:
 
 ### MCP Configuration
 
-Chess Rocket connects to Claude Code via MCP. After cloning:
+Chess Rocket connects to Codex via MCP. After cloning, launch Codex from the
+project root; it loads `.codex/config.toml` and starts the server automatically.
 
-1. Edit `.mcp.json` — replace the placeholder path with your absolute project path:
-   ```json
-   {
-     "mcpServers": {
-       "chess-speedrun": {
-         "command": "uv",
-         "args": ["run", "python", "mcp-server/server.py"],
-         "cwd": "/your/absolute/path/to/chess_rocket"
-       }
-     }
-   }
-   ```
-2. Restart Claude Code — the chess-speedrun MCP server will auto-connect
-3. Verify: Ask Claude "What MCP tools do you have?" — you should see 17+ chess tools
+1. Start Codex from this directory: `codex`
+2. Verify with `codex mcp list` or ask Codex to list its chess tools.
 
 ### Quick Start
 
-**Terminal 1 — Start the Web Dashboard:**
+**Start the standalone Web Dashboard:**
 ```bash
 uv run python scripts/dashboard_server.py
 # Open http://localhost:8088 in your browser
 ```
 
-**Terminal 2 — Start Claude Code & Play:**
+The dashboard starts its own game session, validates and evaluates dragged moves
+with the Chess Rocket engine, plays the coach's reply, and displays the coaching
+message in the chat panel. The Codex/MCP console is optional.
+
+The dashboard delegates coaching to the locally installed and authenticated
+Codex executable, so it uses the same Codex configuration as the console:
+
 ```bash
-# Claude connects to the MCP server automatically
-# Say: "Let's play chess" or "Start a game"
+uv run python scripts/dashboard_server.py
 ```
 
-The board appears in your browser and updates in real-time as you play.
+Set `CODEX_BIN` if the executable is not on your `PATH`, and `CODEX_TIMEOUT` to
+change the per-response timeout. If Codex is unavailable, the board and
+Stockfish opponent still work and the dashboard reports the engine's best move.
 
 ---
 
@@ -314,7 +310,7 @@ For additional puzzles from the Lichess database:
 
 ### Interactive Play
 
-Claude manages the full session:
+Codex manages the full session:
 1. Evaluates your moves before responding
 2. Teaches based on move quality (see thresholds below)
 3. Tracks opening name during play
@@ -412,7 +408,7 @@ Powered by the **SM-2 algorithm** (industry standard):
 - **Quality scale**: 0-2 (failed), 3-5 (passed)
 - **Ease factor**: Adjusted per card based on quality history
 
-Claude automatically creates SRS cards for:
+Codex automatically creates SRS cards for:
 - Significant mistakes during games (>80cp loss)
 - Manually marked positions
 - Opening knowledge gaps
@@ -457,15 +453,14 @@ uv run python -m pytest tests/ --cov=scripts --cov-report=html
 
 1. **New MCP Tool**: Add to `mcp-server/server.py` with `@mcp.tool()` decorator
 2. **New Puzzle Set**: Add JSON file to `puzzles/` with format: `[{"fen": "...", "solution_moves": [...], "theme": "..."}]`
-3. **New Reference**: Add markdown file to `references/` and link from `CLAUDE.md`
+3. **New Reference**: Add markdown file to `references/` and link from `AGENTS.md`
 4. **Opening Support**: Pre-built 3,627 openings; search/quiz/suggest all work automatically
 
 ---
 
 ## References
 
-- **CLAUDE.md** — Full tutor agent instructions (session flow, teaching methodology, tool reference)
-- **SKILL.md** — Claude Code skill documentation (for other agents)
+- **AGENTS.md** — Codex tutor instructions (session flow and teaching methodology)
 - **references/** — 7 educational materials for the tutor to reference
 
 ---
@@ -499,7 +494,7 @@ Areas of interest:
 ## Support
 
 For issues or questions:
-1. Check `CLAUDE.md` for tutor instructions
+1. Check `AGENTS.md` for tutor instructions
 2. Review `references/` for teaching methodology
 3. Run `./scripts/install.sh` to verify setup
 4. Run test suite: `uv run python -m pytest tests/ -v`

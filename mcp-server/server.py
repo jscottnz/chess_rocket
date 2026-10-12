@@ -1,6 +1,6 @@
 """MCP server for Chess Speedrun Learning System.
 
-Exposes Stockfish chess tools to Claude Code via FastMCP.
+Exposes Stockfish chess tools to Codex (or any MCP-compatible client) via FastMCP.
 Games are stored in memory keyed by UUID. Board state is synced
 to data/current_game.json after every move for dashboard consumption.
 """
