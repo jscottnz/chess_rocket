@@ -40,24 +40,36 @@
   .header-stats { display: flex; gap: 16px; font-size: 0.9rem; color: var(--text-dim); }
   .main {
     display: grid;
-    grid-template-columns: minmax(320px, 480px) 1fr;
+    grid-template-columns: minmax(320px, 520px) minmax(360px, 1fr);
     gap: 16px;
     padding: 16px;
     max-width: 1200px;
+    height: calc(100vh - 62px);
+    min-height: 0;
     margin: 0 auto;
+    overflow: hidden;
   }
-  .board-col { display: flex; flex-direction: column; gap: 12px; }
-  .board-wrapper { width: 100%; aspect-ratio: 1; position: relative; }
+  .left-column, .right-column { min-width: 0; min-height: 0; }
+  .left-column { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .board-col { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+  .board-wrapper { width: min(100%, calc(100vh - 355px)); aspect-ratio: 1; position: relative; margin: 0 auto; }
   #board { width: 100% !important; height: auto !important; }
   .board-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
   .overlay-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .85); stroke-width: .06; }
   .overlay-arrow { stroke: #e94560; stroke-width: .12; stroke-linecap: round; opacity: .92; }
   .overlay-label { fill: white; font-size: .34px; font-weight: 700; paint-order: stroke; stroke: #16213e; stroke-width: .04px; }
+  .last-move-arrow { stroke: #4caf50; stroke-width: .09; stroke-linecap: round; opacity: .75; }
+  .message-square { fill: rgba(33, 150, 243, .14); stroke: rgba(33, 150, 243, .48); stroke-width: .045; }
+  .message-piece { fill: none; stroke: rgba(33, 150, 243, .58); stroke-width: .07; }
   .board-info {
     display: flex; justify-content: space-between;
     font-size: 0.85rem; color: var(--text-dim);
   }
-  .panels { display: flex; flex-direction: column; gap: 12px; }
+  .stats-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; overflow-y: auto; padding-right: 3px; }
+  .stats-panels .panel { min-width: 0; padding: 9px 10px; }
+  .stats-panels .panel h2 { margin-bottom: 5px; }
+  .stats-panels .game-over-banner { grid-column: 1 / -1; }
+  .stats-panels .panel:nth-child(1), .stats-panels .panel:nth-child(3), .stats-panels .panel:nth-child(5) { grid-column: 1 / -1; }
   .panel {
     background: var(--surface);
     border-radius: 8px;
@@ -142,11 +154,20 @@
   .setup select, .setup input, .chat-input { width: 100%; margin-top: 5px; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); }
   button { cursor: pointer; border: 0; border-radius: 5px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 600; }
   button:disabled { opacity: .55; cursor: wait; }
-  .chat-panel { display: flex; flex-direction: column; min-height: 260px; }
-  .chat-messages { flex: 1; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .right-column { height: 100%; }
+  .chat-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .chat-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
   .chat-message { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; font-size: .88rem; line-height: 1.4; }
   .chat-message.user { background: var(--surface2); align-self: flex-end; max-width: 88%; }
   .chat-message.assistant { background: #202b4a; align-self: flex-start; max-width: 94%; }
+  .chat-token-square { color: #64b5f6; background: rgba(33, 150, 243, .14); border-radius: 3px; padding: 0 3px; font-weight: 700; }
+  .chat-token-piece { border-radius: 3px; padding: 0 3px; font-weight: 700; }
+  .chat-token-piece.king { color: #ffd54f; background: rgba(255, 193, 7, .14); }
+  .chat-token-piece.queen { color: #f48fb1; background: rgba(233, 69, 96, .14); }
+  .chat-token-piece.rook { color: #81d4fa; background: rgba(33, 150, 243, .14); }
+  .chat-token-piece.bishop { color: #ce93d8; background: rgba(156, 39, 176, .14); }
+  .chat-token-piece.knight { color: #ffb74d; background: rgba(255, 152, 0, .14); }
+  .chat-token-piece.pawn { color: #a5d6a7; background: rgba(76, 175, 80, .14); }
   .chat-form { display: flex; gap: 8px; align-items: flex-end; }
   .chat-form .chat-input { flex: 1; resize: vertical; min-height: 38px; }
   .move-pending { opacity: .6; pointer-events: none; }
@@ -154,6 +175,13 @@
   .lesson-controls.visible { display: flex; }
   .lesson-controls button { padding: 5px 9px; font-size: .75rem; }
   #lesson-title { flex: 1; }
+  @media (max-width: 760px) {
+    .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 62px); overflow: visible; }
+    .board-wrapper { width: min(100%, 72vh); }
+    .left-column { overflow: visible; }
+    .stats-panels { overflow: visible; }
+    .right-column { height: 520px; }
+  }
   @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; }
@@ -191,20 +219,26 @@
 
 <!-- Game layout (hidden until game data arrives) -->
 <template id="game-template">
-  <div class="board-col">
-    <div class="board-wrapper">
-      <div id="board"></div>
-      <svg id="board-overlay" class="board-overlay" viewBox="0 0 8 8" aria-hidden="true">
-        <defs><marker id="arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#e94560"></path></marker></defs>
-        <g id="overlay-drawing"></g>
-      </svg>
+  <div class="left-column">
+    <div class="board-col">
+      <div class="board-wrapper">
+        <div id="board"></div>
+        <svg id="board-overlay" class="board-overlay" viewBox="0 0 8 8" aria-hidden="true">
+          <defs>
+            <marker id="arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#e94560"></path></marker>
+            <marker id="last-arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#4caf50"></path></marker>
+          </defs>
+          <g id="last-move-drawing"></g>
+          <g id="message-highlights"></g>
+          <g id="overlay-drawing"></g>
+        </svg>
+      </div>
+      <div class="board-info">
+        <span id="player-info">Playing as: White</span>
+        <span id="engine-info">Engine: 800 Elo</span>
+      </div>
     </div>
-    <div class="board-info">
-      <span id="player-info">Playing as: White</span>
-      <span id="engine-info">Engine: 800 Elo</span>
-    </div>
-  </div>
-  <div class="panels">
+    <div class="stats-panels">
     <div class="panel" style="border-left-color: var(--accent);">
       <h2>Opening</h2>
       <div id="opening-display"><span class="out-of-book">Starting position</span></div>
@@ -260,6 +294,9 @@
       <div class="game-over-result" id="game-over-result"></div>
       <div class="game-over-details" id="game-over-details"></div>
     </div>
+    </div>
+  </div>
+  <div class="right-column">
     <div class="panel chat-panel" style="border-left-color: var(--accent);">
       <h2>Coach</h2>
       <div class="chat-messages" id="chat-messages"></div>
@@ -321,6 +358,12 @@
     window.addEventListener('resize', () => board.resize());
     gameActive = true;
     document.getElementById('chat-form').addEventListener('submit', sendChat);
+    document.getElementById('chat-input').addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('chat-form').requestSubmit();
+      }
+    });
     document.getElementById('lesson-prev').addEventListener('click', () => showLessonMove(lessonIndex - 1));
     document.getElementById('lesson-next').addEventListener('click', () => showLessonMove(lessonIndex + 1));
     document.getElementById('lesson-play').addEventListener('click', playLesson);
@@ -344,16 +387,72 @@
     const expectedOrientation = state.player_color === 'black' ? 'black' : 'white';
     if (board.orientation() !== expectedOrientation) board.orientation(expectedOrientation);
     updatePanels(state);
+    drawLastMove(state);
   }
 
-  function addChat(role, text) {
+  function addChat(role, text, state, annotations) {
     const messages = document.getElementById('chat-messages');
     if (!messages || !text) return;
     const el = document.createElement('div');
     el.className = 'chat-message ' + role;
-    el.textContent = text;
+    if (role === 'assistant') el.innerHTML = formatChatText(text, annotations || []);
+    else el.textContent = text;
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
+    if (role === 'assistant' && state) drawMessageHighlights(state, annotations || []);
+  }
+
+  function formatChatText(text, annotations) {
+    const marks = (annotations || [])
+      .filter(annotation => annotation.text)
+      .map(annotation => {
+        const start = text.toLowerCase().indexOf(annotation.text.toLowerCase());
+        return {...annotation, start, end: start + annotation.text.length};
+      })
+      .filter(annotation => annotation.start >= 0)
+      .sort((a, b) => a.start - b.start);
+    let result = '';
+    let cursor = 0;
+    marks.forEach(annotation => {
+      if (annotation.start < cursor) return;
+      result += esc(text.slice(cursor, annotation.start));
+      const className = annotation.kind === 'piece'
+        ? `chat-token-piece ${pieceClass(annotation.piece)}`
+        : 'chat-token-square';
+      result += `<span class="${className}">${esc(text.slice(annotation.start, annotation.end))}</span>`;
+      cursor = annotation.end;
+    });
+    return result + esc(text.slice(cursor));
+  }
+
+  function pieceClass(piece) {
+    return {k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn'}[piece] || '';
+  }
+
+  function drawLastMove(state) {
+    const group = document.getElementById('last-move-drawing');
+    if (!group) return;
+    const uci = state.last_move || '';
+    if (uci.length < 4) { group.innerHTML = ''; return; }
+    const from = squarePoint(uci.slice(0, 2), board.orientation());
+    const to = squarePoint(uci.slice(2, 4), board.orientation());
+    group.innerHTML = `<line class="last-move-arrow" marker-end="url(#last-arrow-head)" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"></line>`;
+  }
+
+  function drawMessageHighlights(state, annotations) {
+    const group = document.getElementById('message-highlights');
+    if (!group) return;
+    const locationMarkup = (annotations || []).filter(annotation => annotation.kind === 'square').map(annotation => {
+      const square = annotation.square;
+      const point = squarePoint(square, board.orientation());
+      return `<rect class="message-square" x="${point.x - .5}" y="${point.y - .5}" width="1" height="1"></rect>`;
+    }).join('');
+    const pieceMarkup = (annotations || []).filter(annotation => annotation.kind === 'piece').map(annotation => {
+      const square = annotation.square;
+      const point = squarePoint(square, board.orientation());
+      return `<circle class="message-piece" cx="${point.x}" cy="${point.y}" r=".34"></circle>`;
+    }).join('');
+    group.innerHTML = locationMarkup + pieceMarkup;
   }
 
   function setLesson(lesson) {
@@ -410,14 +509,17 @@
     document.getElementById('board').classList.add('move-pending');
     api('/api/game/move', {move: source + target}).then(result => {
       renderState(result.state);
-      addChat('assistant', result.reply);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations);
       setLesson(result.lesson);
-    }).catch(error => addChat('assistant', error.message)).finally(() => {
+    }).catch(error => {
+      if (lastFen) board.position(lastFen, true);
+      addChat('assistant', error.message);
+    }).finally(() => {
       movePending = false;
       document.getElementById('board').classList.remove('move-pending');
     });
-    // The server is authoritative; wait for its response before displaying the move.
-    return 'snapback';
+    // Keep the locally dragged piece at the target while the request is pending.
+    return undefined;
   }
 
   async function sendChat(event) {
@@ -431,7 +533,7 @@
     button.disabled = true;
     try {
       const result = await api('/api/chat', {message});
-      addChat('assistant', result.reply);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations);
       setLesson(result.lesson);
       renderState(result.state);
     } catch (error) { addChat('assistant', error.message); }

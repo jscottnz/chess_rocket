@@ -40,14 +40,35 @@ _active_game_id: str | None = None
 _state_lock = threading.RLock()
 _chat_history: list[dict[str, str]] = []
 
+
+def _log(message: str) -> None:
+    """Write dashboard diagnostics to stdout immediately."""
+    print(f"[dashboard] {message}", flush=True)
+
 _COACH_SCHEMA = {
     "type": "object",
     "properties": {
         "message": {"type": "string"},
         "demo_title": {"type": "string"},
         "demo_moves": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "annotations": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["square", "piece"]},
+                    "square": {"type": "string"},
+                    "piece": {"type": "string", "enum": ["k", "q", "r", "b", "n", "p", ""]},
+                    "color": {"type": "string", "enum": ["white", "black", ""]},
+                },
+                "required": ["text", "kind", "square", "piece", "color"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["message", "demo_title", "demo_moves"],
+    "required": ["message", "demo_title", "demo_moves", "annotations"],
     "additionalProperties": False,
 }
 
@@ -89,8 +110,13 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "below are authoritative. Do not call tools, do not change files, and do "
         "not claim to have changed the board. If a concrete variation or idea is "
         "helpful, include up to 8 legal SAN moves starting from the exact current "
-        "position in demo_moves; otherwise use an empty array. Return the requested "
-        "JSON object only.\n\n"
+        "position in demo_moves; otherwise use an empty array. Also return explicit "
+        "annotations for board references in your message. Each annotation's text "
+        "must be an exact phrase from message. For a location use kind square and "
+        "its square. For a piece phrase such as 'your bishop', use kind piece and "
+        "the exact square of that specific piece; never annotate every piece of a "
+        "type. If you cannot identify the exact piece, omit the annotation. Return "
+        "the requested JSON object only.\n\n"
         f"Position: {json.dumps(position, ensure_ascii=False)}\n"
         f"Conversation:\n{history or '(none)'}\n"
         f"Player request: {user_message}"
@@ -100,18 +126,21 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         answer_path = Path(temp_dir) / "coach-answer.json"
         schema_path.write_text(json.dumps(_COACH_SCHEMA), encoding="utf-8")
         command = [
-        os.environ.get("CODEX_BIN", "codex"),
-        "-a", "never",
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--json",
-        "-C", str(_PROJECT_ROOT),
-        "-s", "read-only",
-        "--output-schema", str(schema_path),
-        "--output-last-message", str(answer_path),
-        "-",
+            os.environ.get("CODEX_BIN", "codex"),
+            "-a", "never",
+            "-m", os.environ.get("CODEX_MODEL", "gpt-5.6-luna"),
+            "-c", f"model_reasoning_effort={os.environ.get('CODEX_REASONING_EFFORT', 'medium')}",
+            "exec",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--json",
+            "-C", str(_PROJECT_ROOT),
+            "-s", "read-only",
+            "--output-schema", str(schema_path),
+            "--output-last-message", str(answer_path),
+            "-",
         ]
+        _log(f"starting Codex model={os.environ.get('CODEX_MODEL', 'gpt-5.6-luna')} reasoning={os.environ.get('CODEX_REASONING_EFFORT', 'medium')}")
         try:
             result = subprocess.run(
                 command,
@@ -122,6 +151,9 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
                 timeout=int(os.environ.get("CODEX_TIMEOUT", "120")),
                 check=False,
             )
+            _log(f"Codex exited status={result.returncode}")
+            if result.stderr.strip():
+                _log(f"Codex stderr: {result.stderr.strip()[-1000:]}")
             raw = answer_path.read_text(encoding="utf-8") if answer_path.exists() else ""
             try:
                 lesson = json.loads(raw)
@@ -137,20 +169,23 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
                         try:
                             lesson = json.loads(item.get("text", ""))
                         except json.JSONDecodeError:
-                            lesson = {"message": item.get("text", ""), "demo_title": "", "demo_moves": []}
+                            lesson = {"message": item.get("text", ""), "demo_title": "", "demo_moves": [], "annotations": []}
                         break
             if result.returncode != 0 and not lesson:
                 detail = result.stderr.strip() or f"codex exited with status {result.returncode}"
-                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": []}
+                _log(f"Codex request failed: {detail}")
+                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": [], "annotations": []}
             if not isinstance(lesson, dict):
-                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": []}
+                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": [], "annotations": []}
             return {
                 "message": str(lesson.get("message", "I couldn't produce a coaching note.")),
                 "demo_title": str(lesson.get("demo_title", "")),
                 "demo_moves": [str(move) for move in lesson.get("demo_moves", [])][:8],
+                "annotations": lesson.get("annotations", []) if isinstance(lesson.get("annotations", []), list) else [],
             }
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": []}
+            _log(f"Codex request exception: {exc}")
+            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": [], "annotations": []}
 
 
 def _validate_demo_line(game_id: str, lesson: dict, state: dict) -> dict:
@@ -171,7 +206,38 @@ def _validate_demo_line(game_id: str, lesson: dict, state: dict) -> dict:
         validated.append({"san": board.san(move), "uci": move.uci(), "from": move.uci()[:2], "to": move.uci()[2:4]})
         board.push(move)
     lesson["demo_moves"] = validated
+    _validate_annotations(game_id, lesson, state)
     return lesson
+
+
+def _validate_annotations(game_id: str, lesson: dict, state: dict) -> None:
+    """Keep only annotations that refer to an exact current board target."""
+    game = _game_service._games.get(game_id)
+    board = game["board"] if game is not None else None
+    message = lesson.get("message", "")
+    annotations = lesson.get("annotations", [])
+    valid = []
+    if board is None or not isinstance(annotations, list):
+        lesson["annotations"] = []
+        return
+    for annotation in annotations[:12]:
+        if not isinstance(annotation, dict):
+            continue
+        text = str(annotation.get("text", "")).strip()
+        kind = annotation.get("kind")
+        square = str(annotation.get("square", "")).lower()
+        piece = str(annotation.get("piece", "")).lower()
+        color = str(annotation.get("color", "")).lower()
+        if not text or not re.search(re.escape(text), message, re.IGNORECASE):
+            continue
+        if kind not in ("square", "piece") or not re.fullmatch(r"[a-h][1-8]", square):
+            continue
+        board_piece = board.piece_at(_game_service.chess.parse_square(square))
+        if kind == "piece":
+            if board_piece is None or piece != board_piece.symbol().lower() or color != ("white" if board_piece.color else "black"):
+                continue
+        valid.append({"text": text, "kind": kind, "square": square, "piece": piece, "color": color})
+    lesson["annotations"] = valid
 
 
 def _json_body(handler: http.server.BaseHTTPRequestHandler) -> dict:
@@ -344,8 +410,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
 
     def log_message(self, format: str, *args: object) -> None:
-        # Silence per-request logs; only show startup message
-        pass
+        _log(format % args)
 
 
 def main() -> None:
@@ -354,11 +419,11 @@ def main() -> None:
     args = parser.parse_args()
 
     server = http.server.HTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    print(f"Chess Rocket Dashboard: http://localhost:{args.port}")
+    _log(f"Chess Rocket Dashboard: http://localhost:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down.")
+        _log("Shutting down.")
         server.server_close()
 
 

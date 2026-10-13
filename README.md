@@ -254,8 +254,11 @@ uv run python scripts/dashboard_server.py
 ```
 
 Set `CODEX_BIN` if the executable is not on your `PATH`, and `CODEX_TIMEOUT` to
-change the per-response timeout. If Codex is unavailable, the board and
-Stockfish opponent still work and the dashboard reports the engine's best move.
+change the per-response timeout. The dashboard explicitly uses
+`gpt-5.6-luna` with medium reasoning; override these with `CODEX_MODEL` and
+`CODEX_REASONING_EFFORT` if needed. Diagnostics are written to the dashboard
+process's stdout. If Codex is unavailable, the board and Stockfish opponent
+still work and the dashboard reports the engine's best move.
 
 ---
 
