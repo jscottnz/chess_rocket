@@ -260,6 +260,10 @@ change the per-response timeout. The dashboard explicitly uses
 process's stdout. If Codex is unavailable, the board and Stockfish opponent
 still work and the dashboard reports the engine's best move.
 
+Next-move teaching lines are opt-in with the **Show next-move hints
+automatically** checkbox. You can also ask the coach directly to show a line,
+variation, sequence, or demonstration in chat.
+
 ---
 
 ## Data Setup

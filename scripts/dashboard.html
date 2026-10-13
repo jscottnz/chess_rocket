@@ -54,6 +54,25 @@
   .board-col { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
   .board-wrapper { width: min(100%, calc(100vh - 355px)); aspect-ratio: 1; position: relative; margin: 0 auto; }
   #board { width: 100% !important; height: auto !important; }
+  /* Chessboard.js coordinates: make the file/rank labels readable on both square colors. */
+  #board [class*="notation-"] {
+    z-index: 2;
+    font-size: clamp(11px, 1.8vw, 16px) !important;
+    font-weight: 800 !important;
+    line-height: 1 !important;
+    padding: 2px 4px;
+    border-radius: 3px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .7);
+  }
+  #board [class*="white-"] [class*="notation-"] {
+    color: #25170c !important;
+    background: rgba(255, 255, 255, .68);
+    text-shadow: 0 1px 1px rgba(255, 255, 255, .8);
+  }
+  #board [class*="black-"] [class*="notation-"] {
+    color: #fff !important;
+    background: rgba(0, 0, 0, .42);
+  }
   .board-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
   .overlay-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .85); stroke-width: .06; }
   .overlay-arrow { stroke: #e94560; stroke-width: .12; stroke-linecap: round; opacity: .92; }
@@ -61,10 +80,14 @@
   .last-move-arrow { stroke: #4caf50; stroke-width: .09; stroke-linecap: round; opacity: .75; }
   .message-square { fill: rgba(33, 150, 243, .14); stroke: rgba(33, 150, 243, .48); stroke-width: .045; }
   .message-piece { fill: none; stroke: rgba(33, 150, 243, .58); stroke-width: .07; }
+  .message-selected-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .95); stroke-width: .08; }
+  .message-selected-piece { fill: none; stroke: rgba(255, 193, 7, .95); stroke-width: .09; }
   .board-info {
     display: flex; justify-content: space-between;
     font-size: 0.85rem; color: var(--text-dim);
   }
+  .capture-alert { display: none; margin-top: 4px; padding: 5px 8px; border-left: 3px solid var(--orange); border-radius: 4px; background: rgba(255, 152, 0, .13); color: #ffcc80; font-size: .82rem; font-weight: 700; }
+  .capture-alert.visible { display: block; }
   .stats-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; overflow-y: auto; padding-right: 3px; }
   .stats-panels .panel { min-width: 0; padding: 9px 10px; }
   .stats-panels .panel h2 { margin-bottom: 5px; }
@@ -154,14 +177,23 @@
   .setup select, .setup input, .chat-input { width: 100%; margin-top: 5px; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); }
   button { cursor: pointer; border: 0; border-radius: 5px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 600; }
   button:disabled { opacity: .55; cursor: wait; }
-  .right-column { height: 100%; }
-  .chat-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .right-column { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "chat notes"; gap: 10px; min-height: 0; }
+  .chat-panel { grid-area: chat; display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
+  .notes-panel { grid-area: notes; display: flex; flex-direction: column; min-height: 0; }
+  .notes-help { color: var(--text-dim); font-size: .78rem; line-height: 1.35; margin-bottom: 8px; }
+  .notes-input { flex: 1; min-height: 180px; width: 100%; resize: vertical; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); font: inherit; line-height: 1.4; }
+  .notes-footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .notes-status { color: var(--text-dim); font-size: .75rem; }
+  #notes-add-explanation { display: none; }
   .chat-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
   .chat-message { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; font-size: .88rem; line-height: 1.4; }
   .chat-message.user { background: var(--surface2); align-self: flex-end; max-width: 88%; }
   .chat-message.assistant { background: #202b4a; align-self: flex-start; max-width: 94%; }
   .chat-token-square { color: #64b5f6; background: rgba(33, 150, 243, .14); border-radius: 3px; padding: 0 3px; font-weight: 700; }
   .chat-token-piece { border-radius: 3px; padding: 0 3px; font-weight: 700; }
+  .chat-token-annotation { cursor: pointer; transition: box-shadow .12s, outline .12s; }
+  .chat-token-annotation:hover, .chat-token-annotation.selected { outline: 1px solid rgba(255, 193, 7, .85); box-shadow: 0 0 0 2px rgba(255, 193, 7, .14); }
+  .chat-token-jargon { color: #80cbc4; background: rgba(0, 150, 136, .16); border-bottom: 1px dotted #80cbc4; }
   .chat-token-piece.king { color: #ffd54f; background: rgba(255, 193, 7, .14); }
   .chat-token-piece.queen { color: #f48fb1; background: rgba(233, 69, 96, .14); }
   .chat-token-piece.rook { color: #81d4fa; background: rgba(33, 150, 243, .14); }
@@ -170,6 +202,8 @@
   .chat-token-piece.pawn { color: #a5d6a7; background: rgba(76, 175, 80, .14); }
   .chat-form { display: flex; gap: 8px; align-items: flex-end; }
   .chat-form .chat-input { flex: 1; resize: vertical; min-height: 38px; }
+  .chat-options { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--text-dim); font-size: .78rem; }
+  .chat-options input { accent-color: var(--accent); }
   .move-pending { opacity: .6; pointer-events: none; }
   .lesson-controls { display: none; align-items: center; gap: 8px; margin-top: 10px; font-size: .8rem; color: var(--text-dim); }
   .lesson-controls.visible { display: flex; }
@@ -180,7 +214,8 @@
     .board-wrapper { width: min(100%, 72vh); }
     .left-column { overflow: visible; }
     .stats-panels { overflow: visible; }
-    .right-column { height: 520px; }
+    .right-column { height: auto; min-height: 760px; grid-template-columns: 1fr; grid-template-rows: minmax(220px, auto) minmax(480px, 1fr); grid-template-areas: "notes" "chat"; }
+    .notes-input { min-height: 150px; }
   }
   @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
   /* Scrollbar */
@@ -237,6 +272,7 @@
         <span id="player-info">Playing as: White</span>
         <span id="engine-info">Engine: 800 Elo</span>
       </div>
+      <div class="capture-alert" id="capture-alert" aria-live="polite"></div>
     </div>
     <div class="stats-panels">
     <div class="panel" style="border-left-color: var(--accent);">
@@ -297,9 +333,23 @@
     </div>
   </div>
   <div class="right-column">
+    <div class="panel notes-panel" style="border-left-color: var(--blue);">
+      <h2>Notes</h2>
+      <p class="notes-help">Your persistent tutor notes. Add goals, recurring mistakes, and things to remember.</p>
+      <textarea class="notes-input" id="notes-input" placeholder="e.g. I often move too quickly in the opening..."></textarea>
+      <div class="notes-footer">
+        <button type="button" id="notes-save">Save notes</button>
+        <button type="button" id="notes-add-explanation">Add explanation</button>
+        <span class="notes-status" id="notes-status">Saved across games</span>
+      </div>
+    </div>
     <div class="panel chat-panel" style="border-left-color: var(--accent);">
       <h2>Coach</h2>
       <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-options">
+        <label><input type="checkbox" id="show-next-hint"> Show next-move hints automatically</label>
+        <label><input type="checkbox" id="explain-engine-move"> Explain why the coach moved</label>
+      </div>
       <form class="chat-form" id="chat-form">
         <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask about the position..."></textarea>
         <button type="submit" id="chat-send">Send</button>
@@ -342,6 +392,8 @@
   let currentLesson = null;
   let lessonIndex = 0;
   let lessonTimer = null;
+  let selectedAnnotationSquare = null;
+  let jargonExplanation = null;
 
   function initBoard(orientation) {
     const main = document.getElementById('main-content');
@@ -357,7 +409,45 @@
     });
     window.addEventListener('resize', () => board.resize());
     gameActive = true;
+    loadNotes();
+    document.getElementById('notes-save').addEventListener('click', saveNotes);
+    document.getElementById('notes-add-explanation').addEventListener('click', addJargonExplanationToNotes);
+    document.getElementById('notes-input').addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        saveNotes();
+      }
+    });
     document.getElementById('chat-form').addEventListener('submit', sendChat);
+    document.getElementById('chat-messages').addEventListener('click', event => {
+      const jargonTarget = event.target.closest('[data-jargon-term]');
+      if (jargonTarget) {
+        explainJargon(jargonTarget.dataset.jargonTerm);
+        return;
+      }
+      const target = event.target.closest('[data-annotation-square]');
+      if (!target) return;
+      const square = target.dataset.annotationSquare;
+      if (!square) return;
+      selectedAnnotationSquare = square;
+      document.querySelectorAll('.chat-token-annotation.selected').forEach(el => el.classList.remove('selected'));
+      target.classList.add('selected');
+      drawMessageHighlights(null, window.lastMessageAnnotations || []);
+      const boardElement = document.getElementById('board');
+      if (boardElement && window.innerWidth < 760) boardElement.scrollIntoView({behavior: 'smooth', block: 'center'});
+    });
+    document.getElementById('chat-messages').addEventListener('keydown', event => {
+      const jargonTarget = event.target.closest('[data-jargon-term]');
+      if (jargonTarget && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        jargonTarget.click();
+        return;
+      }
+      const target = event.target.closest('[data-annotation-square]');
+      if (!target || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      target.click();
+    });
     document.getElementById('chat-input').addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
@@ -380,6 +470,75 @@
     return result;
   }
 
+  async function loadNotes() {
+    try {
+      const result = await api('/api/notes');
+      document.getElementById('notes-input').value = result.notes || '';
+    } catch (error) {
+      document.getElementById('notes-status').textContent = 'Unable to load notes';
+    }
+  }
+
+  async function saveNotes() {
+    const input = document.getElementById('notes-input');
+    const button = document.getElementById('notes-save');
+    const status = document.getElementById('notes-status');
+    button.disabled = true;
+    status.textContent = 'Saving...';
+    try {
+      const result = await api('/api/notes', {notes: input.value});
+      input.value = result.notes || '';
+      status.textContent = 'Saved across games';
+      return true;
+    } catch (error) {
+      status.textContent = 'Could not save notes';
+      return false;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function applyLessonNotes(lesson) {
+    if (!lesson || typeof lesson.notes !== 'string') return;
+    const input = document.getElementById('notes-input');
+    if (input && input.value !== lesson.notes) input.value = lesson.notes;
+    const status = document.getElementById('notes-status');
+    if (status) status.textContent = 'Updated by coach';
+  }
+
+  async function explainJargon(term) {
+    if (!term || movePending) return;
+    const request = `Explain the chess term "${term}" in plain language, with a short example from the current position if useful.`;
+    const button = document.getElementById('chat-send');
+    addChat('user', request);
+    button.disabled = true;
+    try {
+      const result = await api('/api/chat', {message: request});
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+      applyLessonNotes(result.lesson);
+      setLesson(result.lesson);
+      renderState(result.state);
+      jargonExplanation = {term, text: result.reply};
+      document.getElementById('notes-add-explanation').style.display = 'inline-block';
+      document.getElementById('notes-status').textContent = `Ready to add “${term}”`;
+    } catch (error) {
+      addChat('assistant', error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function addJargonExplanationToNotes() {
+    if (!jargonExplanation) return;
+    const input = document.getElementById('notes-input');
+    const entry = `${jargonExplanation.term}: ${jargonExplanation.text}`;
+    if (!input.value.includes(entry)) input.value = input.value.trim() ? `${input.value.trim()}\n\n${entry}` : entry;
+    if (await saveNotes()) {
+      jargonExplanation = null;
+      document.getElementById('notes-add-explanation').style.display = 'none';
+    }
+  }
+
   function renderState(state) {
     if (!state || !state.fen) return;
     if (!gameActive) initBoard(state.player_color || 'white');
@@ -390,25 +549,33 @@
     drawLastMove(state);
   }
 
-  function addChat(role, text, state, annotations) {
+  function addChat(role, text, state, annotations, jargon) {
     const messages = document.getElementById('chat-messages');
     if (!messages || !text) return;
     const el = document.createElement('div');
     el.className = 'chat-message ' + role;
-    if (role === 'assistant') el.innerHTML = formatChatText(text, annotations || []);
+    if (role === 'assistant') {
+      window.lastMessageAnnotations = annotations || [];
+      selectedAnnotationSquare = null;
+      el.innerHTML = formatChatText(text, annotations || [], jargon || []);
+    }
     else el.textContent = text;
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
     if (role === 'assistant' && state) drawMessageHighlights(state, annotations || []);
   }
 
-  function formatChatText(text, annotations) {
+  function formatChatText(text, annotations, jargon) {
     const marks = (annotations || [])
       .filter(annotation => annotation.text)
       .map(annotation => {
         const start = text.toLowerCase().indexOf(annotation.text.toLowerCase());
-        return {...annotation, start, end: start + annotation.text.length};
+        return {...annotation, markType: 'board', start, end: start + annotation.text.length};
       })
+      .concat((jargon || []).filter(annotation => annotation.text).map(annotation => {
+        const start = text.toLowerCase().indexOf(annotation.text.toLowerCase());
+        return {...annotation, markType: 'jargon', start, end: start + annotation.text.length};
+      }))
       .filter(annotation => annotation.start >= 0)
       .sort((a, b) => a.start - b.start);
     let result = '';
@@ -416,10 +583,15 @@
     marks.forEach(annotation => {
       if (annotation.start < cursor) return;
       result += esc(text.slice(cursor, annotation.start));
+      if (annotation.markType === 'jargon') {
+        result += `<span class="chat-token-annotation chat-token-jargon" role="button" tabindex="0" data-jargon-term="${esc(annotation.term)}" title="Explain ${esc(annotation.term)}">${esc(text.slice(annotation.start, annotation.end))}</span>`;
+        cursor = annotation.end;
+        return;
+      }
       const className = annotation.kind === 'piece'
         ? `chat-token-piece ${pieceClass(annotation.piece)}`
         : 'chat-token-square';
-      result += `<span class="${className}">${esc(text.slice(annotation.start, annotation.end))}</span>`;
+      result += `<span class="${className} chat-token-annotation" role="button" tabindex="0" data-annotation-square="${annotation.square}" title="Highlight ${annotation.square}">${esc(text.slice(annotation.start, annotation.end))}</span>`;
       cursor = annotation.end;
     });
     return result + esc(text.slice(cursor));
@@ -452,7 +624,12 @@
       const point = squarePoint(square, board.orientation());
       return `<circle class="message-piece" cx="${point.x}" cy="${point.y}" r=".34"></circle>`;
     }).join('');
-    group.innerHTML = locationMarkup + pieceMarkup;
+    let selectedMarkup = '';
+    if (selectedAnnotationSquare) {
+      const point = squarePoint(selectedAnnotationSquare, board.orientation());
+      selectedMarkup = `<rect class="message-selected-square" x="${point.x - .5}" y="${point.y - .5}" width="1" height="1"></rect><circle class="message-selected-piece" cx="${point.x}" cy="${point.y}" r=".39"></circle>`;
+    }
+    group.innerHTML = locationMarkup + pieceMarkup + selectedMarkup;
   }
 
   function setLesson(lesson) {
@@ -507,9 +684,14 @@
     if (movePending) return 'snapback';
     movePending = true;
     document.getElementById('board').classList.add('move-pending');
-    api('/api/game/move', {move: source + target}).then(result => {
+    api('/api/game/move', {
+      move: source + target,
+      show_hint: document.getElementById('show-next-hint').checked,
+      explain_engine_move: document.getElementById('explain-engine-move').checked,
+    }).then(result => {
       renderState(result.state);
-      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+      applyLessonNotes(result.lesson);
       setLesson(result.lesson);
     }).catch(error => {
       if (lastFen) board.position(lastFen, true);
@@ -533,7 +715,8 @@
     button.disabled = true;
     try {
       const result = await api('/api/chat', {message});
-      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+      applyLessonNotes(result.lesson);
       setLesson(result.lesson);
       renderState(result.state);
     } catch (error) { addChat('assistant', error.message); }
@@ -577,6 +760,19 @@
     // Board info
     document.getElementById('player-info').textContent = 'Playing as: ' + capitalize(state.player_color || 'white');
     document.getElementById('engine-info').textContent = 'Engine: ' + (state.target_elo || 800) + ' Elo';
+    if (Object.prototype.hasOwnProperty.call(state, 'black_capture')) {
+      const captureAlert = document.getElementById('capture-alert');
+      const capture = state.black_capture;
+      if (capture && capture.square) {
+        const pieceNames = {p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king'};
+        const captured = pieceNames[capture.captured_piece] || 'piece';
+        captureAlert.textContent = `Black captured a ${captured} on ${capture.square}${capture.move ? ` with ${capture.move}` : ''}`;
+        captureAlert.classList.add('visible');
+      } else {
+        captureAlert.textContent = '';
+        captureAlert.classList.remove('visible');
+      }
+    }
 
     // Opening
     const openingEl = document.getElementById('opening-display');

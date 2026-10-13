@@ -22,6 +22,7 @@ import chess
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT / "data"
+_NOTES_FILE = _DATA_DIR / "notes.json"
 _DASHBOARD_HTML = Path(__file__).resolve().parent / "dashboard.html"
 
 # The dashboard is a standalone tutor session.  It loads the same implementation
@@ -45,6 +46,31 @@ def _log(message: str) -> None:
     """Write dashboard diagnostics to stdout immediately."""
     print(f"[dashboard] {message}", flush=True)
 
+
+def _load_notes() -> str:
+    """Load player notes shared across all dashboard games."""
+    try:
+        if _NOTES_FILE.exists():
+            payload = json.loads(_NOTES_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return str(payload.get("notes", ""))[:20_000]
+    except (OSError, json.JSONDecodeError):
+        _log("Could not read persistent notes")
+    return ""
+
+
+def _save_notes(notes: str) -> str:
+    """Persist player notes atomically and return the saved text."""
+    notes = str(notes)[:20_000]
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = _NOTES_FILE.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps({"notes": notes}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temporary, _NOTES_FILE)
+    return notes
+
 _COACH_SCHEMA = {
     "type": "object",
     "properties": {
@@ -67,8 +93,30 @@ _COACH_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "jargon": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "term": {"type": "string"},
+                },
+                "required": ["text", "term"],
+                "additionalProperties": False,
+            },
+        },
+        "notes_update": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["none", "replace"]},
+                "text": {"type": "string"},
+            },
+            "required": ["action", "text"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["message", "demo_title", "demo_moves", "annotations"],
+    "required": ["message", "demo_title", "demo_moves", "annotations", "jargon", "notes_update"],
     "additionalProperties": False,
 }
 
@@ -79,6 +127,43 @@ def _full_state(game_id: str) -> dict:
     if game is None:
         return {"error": f"Game not found: {game_id}"}
     return _game_service._build_game_state(game_id, game)
+
+
+def _capture_annotation(before: chess.Board, result: dict) -> dict | None:
+    """Describe a black capture made by the move in a compact UI-friendly form."""
+    if before.turn != chess.BLACK:
+        return None
+    uci = str(result.get("last_move", ""))
+    if len(uci) < 4:
+        return None
+    move = chess.Move.from_uci(uci[:5])
+    captured = before.piece_at(move.to_square)
+    if captured is None and before.is_en_passant(move):
+        captured = before.piece_at(move.to_square - 8)
+    if captured is None:
+        return None
+    return {
+        "captured_piece": captured.symbol().lower(),
+        "captured_color": "white" if captured.color else "black",
+        "square": chess.square_name(move.to_square),
+        "move": str(result.get("last_move_san", "")),
+    }
+
+
+def _engine_analysis(game_id: str, board: chess.Board | None = None) -> list[dict]:
+    """Return fresh multi-PV Stockfish analysis for the tutor prompt."""
+    game = _game_service._games.get(game_id)
+    if game is None:
+        return []
+    try:
+        analysis_board = board.copy() if board is not None else game["board"].copy()
+        if analysis_board.is_game_over():
+            return []
+        depth = max(12, min(22, int(os.environ.get("COACH_ENGINE_DEPTH", "18"))))
+        return game["engine"].analyze_position(analysis_board, depth=depth, multipv=3)
+    except (OSError, ValueError, RuntimeError, chess.engine.EngineError) as exc:
+        _log(f"Coach engine analysis unavailable: {exc}")
+        return []
 
 
 def _model_reply(user_message: str, state: dict, move_context: dict | None = None) -> dict:
@@ -99,15 +184,36 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
     }
     if move_context:
         position["last_move_evaluation"] = move_context
+        position["engine_analysis"] = move_context.get("engine_analysis", [])
+        position["coach_move_analysis"] = move_context.get("pre_engine_analysis", [])
 
     history = "\n".join(
         f"{item['role'].title()}: {item['content']}" for item in _chat_history[-10:]
     )
+    notes = _load_notes()
     prompt = (
         "You are the Chess Rocket tutor. Reply directly to the player in a warm, "
-        "concise way. Adjust vocabulary to their Elo. Explain one actionable idea "
-        "and use the engine evaluation when supplied. The position and chess state "
+        "concise, encouraging way. Adjust vocabulary to their Elo. Never shame the "
+        "player and do not call a move a 'blunder', 'serious blunder', 'mistake', "
+        "'bad move', or similar label in your prose. Instead describe the chess "
+        "effect: say what the move weakened, which piece or square became vulnerable, "
+        "what threat was missed, and what practical repair or habit would help. For "
+        "example: 'That move weakened your position because it left the rook loose; "
+        "let's look at how to protect it.' Treat classification and centipawn loss as "
+        "private coaching signals, not language to repeat to the player. Explain one actionable idea "
+        "and use the private position analysis when supplied. The position and chess state "
         "below are authoritative. Do not call tools, do not change files, and do "
+        "not make an unverified tactical claim. Private analysis is included below. "
+        "If you recommend a concrete move, it must be one of the top candidates or a "
+        "directly calculated continuation from one of them. "
+        "Never call a move 'best' unless the analysis supports it; if your earlier "
+        "message conflicts with the analysis, explicitly acknowledge and correct it. "
+        "Treat the analysis as private: never mention Stockfish, the engine, engine "
+        "depth, centipawns, or that you consulted an engine. Explain the resulting "
+        "chess idea, trade-offs, threats, and consequences as your own coaching. "
+        "When the player asks for a recommendation, first use the private analysis "
+        "to select the sound candidate, then explain why it works and what the player "
+        "should watch for afterward. "
         "not claim to have changed the board. If a concrete variation or idea is "
         "helpful, include up to 8 legal SAN moves starting from the exact current "
         "position in demo_moves; otherwise use an empty array. Also return explicit "
@@ -116,11 +222,30 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "its square. For a piece phrase such as 'your bishop', use kind piece and "
         "the exact square of that specific piece; never annotate every piece of a "
         "type. If you cannot identify the exact piece, omit the annotation. Return "
-        "the requested JSON object only.\n\n"
+        "jargon annotations for specialized chess terms in your message. Each jargon "
+        "annotation must have text as an exact phrase from message and term as the "
+        "short term to explain. Do not annotate ordinary words like move, piece, or "
+        "good. Return "
+        "the requested JSON object only. Your response must also include notes_update. "
+        "Use action none and an empty text when no note change is needed. Use action "
+        "replace with the complete corrected notes when the player asks to update notes "
+        "or when you identify a clear factual chess correction in them. Preserve useful "
+        "existing notes when replacing them; do not rewrite notes unnecessarily.\n\n"
         f"Position: {json.dumps(position, ensure_ascii=False)}\n"
+        f"Persistent player notes (shared across games):\n{notes or '(none)'}\n"
+        f"Private position analysis (authoritative for concrete recommendations; do not mention its source):\n"
+        f"{json.dumps(position.get('engine_analysis', []), ensure_ascii=False)}\n"
         f"Conversation:\n{history or '(none)'}\n"
         f"Player request: {user_message}"
     )
+    if move_context and move_context.get("explain_engine_move") and move_context.get("engine_move"):
+        prompt += (
+            "\n\nThe player enabled engine-move explanations. Explain why the coach's "
+            f"move {move_context['engine_move']} was played, focusing on the plan, "
+            "threat, or positional reason rather than only naming the move. Do not "
+            "mention how the move was selected. If this is Black's move, explicitly "
+            "refer to Black."
+        )
     with tempfile.TemporaryDirectory(prefix="chess-rocket-codex-") as temp_dir:
         schema_path = Path(temp_dir) / "coach-schema.json"
         answer_path = Path(temp_dir) / "coach-answer.json"
@@ -174,21 +299,39 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
             if result.returncode != 0 and not lesson:
                 detail = result.stderr.strip() or f"codex exited with status {result.returncode}"
                 _log(f"Codex request failed: {detail}")
-                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": [], "annotations": []}
+                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
             if not isinstance(lesson, dict):
-                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": [], "annotations": []}
+                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
+            notes_update = lesson.get("notes_update", {})
+            if isinstance(notes_update, dict) and notes_update.get("action") == "replace":
+                _save_notes(str(notes_update.get("text", "")))
+            jargon = []
+            for item in lesson.get("jargon", []) if isinstance(lesson.get("jargon", []), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text", "")).strip()
+                term = str(item.get("term", "")).strip()
+                if text and term and re.search(re.escape(text), str(lesson.get("message", "")), re.IGNORECASE):
+                    jargon.append({"text": text, "term": term[:120]})
             return {
                 "message": str(lesson.get("message", "I couldn't produce a coaching note.")),
                 "demo_title": str(lesson.get("demo_title", "")),
                 "demo_moves": [str(move) for move in lesson.get("demo_moves", [])][:8],
                 "annotations": lesson.get("annotations", []) if isinstance(lesson.get("annotations", []), list) else [],
+                "jargon": jargon[:12],
+                "notes": _load_notes(),
             }
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             _log(f"Codex request exception: {exc}")
-            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": [], "annotations": []}
+            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes": _load_notes()}
 
 
-def _validate_demo_line(game_id: str, lesson: dict, state: dict) -> dict:
+def _validate_demo_line(
+    game_id: str,
+    lesson: dict,
+    state: dict,
+    engine_analysis: list[dict] | None = None,
+) -> dict:
     """Validate Codex's SAN line and convert it to overlay-friendly UCI moves."""
     game = _game_service._games.get(game_id)
     moves = lesson.get("demo_moves", [])
@@ -205,6 +348,17 @@ def _validate_demo_line(game_id: str, lesson: dict, state: dict) -> dict:
             break
         validated.append({"san": board.san(move), "uci": move.uci(), "from": move.uci()[:2], "to": move.uci()[2:4]})
         board.push(move)
+    if validated and engine_analysis:
+        engine_first_moves = {
+            line.get("pv", [])[0]
+            for line in engine_analysis
+            if isinstance(line, dict) and line.get("pv")
+        }
+        if engine_first_moves and validated[0]["san"] not in engine_first_moves:
+            _log(
+                f"Discarding unverified teaching line starting with {validated[0]['san']}"
+            )
+            validated = []
     lesson["demo_moves"] = validated
     _validate_annotations(game_id, lesson, state)
     return lesson
@@ -240,6 +394,15 @@ def _validate_annotations(game_id: str, lesson: dict, state: dict) -> None:
     lesson["annotations"] = valid
 
 
+def _requests_demo_line(message: str) -> bool:
+    """Return whether the player explicitly asked to see moves or a variation."""
+    return bool(re.search(
+        r"\b(show|demonstrate|variation|line|moves?|sequence|play out|what should I play|how should I play)\b",
+        message,
+        re.IGNORECASE,
+    ))
+
+
 def _json_body(handler: http.server.BaseHTTPRequestHandler) -> dict:
     length = int(handler.headers.get("Content-Length", "0"))
     if length > 64_000:
@@ -267,6 +430,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_payload(None)
         elif self.path == "/api/progress":
             self._serve_json(_DATA_DIR / "progress.json")
+        elif self.path == "/api/notes":
+            self._serve_payload({"notes": _load_notes()})
         elif self.path == "/api/chat/history":
             self._serve_payload({"messages": _chat_history})
         else:
@@ -277,6 +442,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             payload = _json_body(self)
             with _state_lock:
+                if self.path == "/api/notes":
+                    notes = _save_notes(str(payload.get("notes", "")))
+                    self._serve_payload({"notes": notes})
+                    return
                 if self.path == "/api/game/new":
                     target_elo = int(payload.get("target_elo", 800))
                     player_color = payload.get("player_color", "white")
@@ -301,6 +470,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     player_turn = "white" if board.turn else "black"
                     if player_turn != game["player_color"]:
                         raise ValueError("It is the coach's turn")
+                    player_board_before = board.copy()
                     uci = str(payload.get("move", ""))
                     # The board sends four-character UCI for ordinary moves.
                     # Default promotions to a queen until a promotion picker is
@@ -317,11 +487,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     evaluation = _game_service.evaluate_move(_active_game_id, san)
                     if "error" in evaluation:
                         raise ValueError(evaluation["error"])
-                    _game_service.make_move(_active_game_id, san)
+                    player_state = _game_service.make_move(_active_game_id, san)
+                    capture = _capture_annotation(player_board_before, player_state)
                     state = _full_state(_active_game_id)
+                    engine_move_san = ""
+                    pre_engine_analysis = []
                     if not state["is_game_over"]:
-                        _game_service.engine_move(_active_game_id)
+                        engine_board_before = game["board"].copy()
+                        if bool(payload.get("explain_engine_move", False)):
+                            pre_engine_analysis = _engine_analysis(_active_game_id, engine_board_before)
+                        engine_state = _game_service.engine_move(_active_game_id)
+                        engine_move_san = str(engine_state.get("last_move_san", ""))
+                        capture = _capture_annotation(engine_board_before, engine_state) or capture
                         state = _full_state(_active_game_id)
+                    state["black_capture"] = capture
+                    engine_analysis = _engine_analysis(_active_game_id)
                     coach_prompt = (
                         f"The player played {san}. Give a brief coaching explanation, "
                         "then mention what to look for in the next position."
@@ -331,8 +511,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                         "classification": evaluation.get("classification"),
                         "cp_loss": evaluation.get("cp_loss"),
                         "best_move": evaluation.get("best_move_san"),
+                        "engine_move": engine_move_san,
+                        "explain_engine_move": bool(payload.get("explain_engine_move", False)),
+                        "pre_engine_analysis": pre_engine_analysis,
+                        "engine_analysis": engine_analysis,
                     })
-                    lesson = _validate_demo_line(_active_game_id, lesson, state)
+                    if not bool(payload.get("show_hint", False)):
+                        lesson["demo_moves"] = []
+                    lesson = _validate_demo_line(_active_game_id, lesson, state, engine_analysis)
                     _chat_history.extend([
                         {"role": "user", "content": f"I played {san}."},
                         {"role": "assistant", "content": lesson["message"]},
@@ -346,8 +532,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     game = _game_service._games.get(_active_game_id)
                     if game is None or game["board"].is_game_over():
                         raise ValueError("No engine move is available")
-                    _game_service.engine_move(_active_game_id)
-                    self._serve_payload({"state": _full_state(_active_game_id)})
+                    board_before = game["board"].copy()
+                    engine_state = _game_service.engine_move(_active_game_id)
+                    state = _full_state(_active_game_id)
+                    state["black_capture"] = _capture_annotation(board_before, engine_state)
+                    self._serve_payload({"state": state})
                     return
 
                 if self.path == "/api/chat":
@@ -357,7 +546,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     if not message or len(message) > 4_000:
                         raise ValueError("Message must be between 1 and 4000 characters")
                     state = _full_state(_active_game_id)
-                    lesson = _validate_demo_line(_active_game_id, _model_reply(message, state), state)
+                    engine_analysis = _engine_analysis(_active_game_id)
+                    lesson = _validate_demo_line(
+                        _active_game_id,
+                        _model_reply(message, state, {"engine_analysis": engine_analysis}),
+                        state,
+                        engine_analysis,
+                    )
+                    if not _requests_demo_line(message):
+                        lesson["demo_moves"] = []
                     _chat_history.extend([
                         {"role": "user", "content": message},
                         {"role": "assistant", "content": lesson["message"]},
@@ -409,8 +606,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def _cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
 
+    def log_request(self, code: int | str, size: int | str = "-") -> None:
+        """Suppress normal HTTP access logs."""
+        pass
+
+    def log_error(self, format: str, *args: object) -> None:
+        """Keep HTTP errors visible without logging every successful request."""
+        _log(f"HTTP error: {format % args}")
+
     def log_message(self, format: str, *args: object) -> None:
-        _log(format % args)
+        # BaseHTTPRequestHandler routes some diagnostics here; normal requests
+        # are handled by log_request above and intentionally remain quiet.
+        pass
 
 
 def main() -> None:
