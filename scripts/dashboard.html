@@ -86,6 +86,8 @@
     display: flex; justify-content: space-between;
     font-size: 0.85rem; color: var(--text-dim);
   }
+  .board-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+  .undo-button { padding: 5px 10px; font-size: .78rem; background: var(--surface2); }
   .capture-alert { display: none; margin-top: 4px; padding: 5px 8px; border-left: 3px solid var(--orange); border-radius: 4px; background: rgba(255, 152, 0, .13); color: #ffcc80; font-size: .82rem; font-weight: 700; }
   .capture-alert.visible { display: block; }
   .stats-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; overflow-y: auto; padding-right: 3px; }
@@ -272,6 +274,7 @@
         <span id="player-info">Playing as: White</span>
         <span id="engine-info">Engine: 800 Elo</span>
       </div>
+      <div class="board-actions"><button type="button" class="undo-button" id="undo-move" disabled>Undo move</button></div>
       <div class="capture-alert" id="capture-alert" aria-live="polite"></div>
     </div>
     <div class="stats-panels">
@@ -411,6 +414,7 @@
     gameActive = true;
     loadNotes();
     document.getElementById('notes-save').addEventListener('click', saveNotes);
+    document.getElementById('undo-move').addEventListener('click', undoMove);
     document.getElementById('notes-add-explanation').addEventListener('click', addJargonExplanationToNotes);
     document.getElementById('notes-input').addEventListener('keydown', event => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -498,6 +502,44 @@
     }
   }
 
+  function removeLastMoveConversation() {
+    const messages = document.getElementById('chat-messages');
+    if (!messages) return;
+    const children = Array.from(messages.children);
+    let moveMessageIndex = -1;
+    for (let i = children.length - 1; i >= 0; i--) {
+      if (children[i].classList.contains('user') && children[i].textContent.startsWith('I played ')) {
+        moveMessageIndex = i;
+        break;
+      }
+    }
+    if (moveMessageIndex >= 0) {
+      for (let i = children.length - 1; i >= moveMessageIndex; i--) children[i].remove();
+    }
+  }
+
+  async function undoMove() {
+    if (movePending) return;
+    const button = document.getElementById('undo-move');
+    button.disabled = true;
+    let completed = false;
+    try {
+      const result = await api('/api/game/undo');
+      removeLastMoveConversation();
+      selectedAnnotationSquare = null;
+      window.lastMessageAnnotations = [];
+      document.getElementById('message-highlights').innerHTML = '';
+      setLesson(null);
+      renderState(result.state);
+      addChat('assistant', 'Move undone. Try a different move.');
+      completed = true;
+    } catch (error) {
+      addChat('assistant', error.message);
+    } finally {
+      if (!completed) button.disabled = false;
+    }
+  }
+
   function applyLessonNotes(lesson) {
     if (!lesson || typeof lesson.notes !== 'string') return;
     const input = document.getElementById('notes-input');
@@ -547,6 +589,8 @@
     if (board.orientation() !== expectedOrientation) board.orientation(expectedOrientation);
     updatePanels(state);
     drawLastMove(state);
+    const undoButton = document.getElementById('undo-move');
+    if (undoButton) undoButton.disabled = !state.move_list || state.move_list.length === 0 || movePending;
   }
 
   function addChat(role, text, state, annotations, jargon) {

@@ -545,6 +545,29 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     self._serve_payload({"state": state})
                     return
 
+                if self.path == "/api/game/undo":
+                    if not _active_game_id:
+                        raise ValueError("Start a game first")
+                    result = _game_service.undo_move(_active_game_id)
+                    if result.get("error"):
+                        raise ValueError(result["error"])
+                    # Remove the move and its automatic coaching response from the
+                    # private conversation so future advice follows the new line.
+                    move_history_index = next(
+                        (
+                            index for index in range(len(_chat_history) - 1, -1, -1)
+                            if _chat_history[index].get("role") == "user"
+                            and _chat_history[index].get("content", "").startswith("I played ")
+                        ),
+                        None,
+                    )
+                    if move_history_index is not None:
+                        del _chat_history[move_history_index:]
+                    state = _full_state(_active_game_id)
+                    state["black_capture"] = None
+                    self._serve_payload({"state": state})
+                    return
+
                 if self.path == "/api/chat":
                     if not _active_game_id:
                         raise ValueError("Start a game first")
