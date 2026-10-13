@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import random
 import sys
 import subprocess
 import threading
@@ -24,6 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT / "data"
 _NOTES_FILE = _DATA_DIR / "notes.json"
 _DASHBOARD_HTML = Path(__file__).resolve().parent / "dashboard.html"
+_PUZZLES_DIR = _PROJECT_ROOT / "puzzles"
 
 # The dashboard is a standalone tutor session.  It loads the same implementation
 # used by the MCP server, but does not require an MCP client or console to be
@@ -38,6 +40,10 @@ sys.modules[_SERVER_SPEC.name] = _game_service
 _SERVER_SPEC.loader.exec_module(_game_service)
 
 _active_game_id: str | None = None
+_active_puzzle: dict | None = None
+_puzzle_board: chess.Board | None = None
+_puzzle_move_index = 0
+_puzzle_snapshots: list[tuple[chess.Board, int]] = []
 _state_lock = threading.RLock()
 _chat_history: list[dict[str, str]] = []
 
@@ -129,6 +135,87 @@ def _full_state(game_id: str) -> dict:
     return _game_service._build_game_state(game_id, game)
 
 
+def _load_puzzle_candidates() -> list[dict]:
+    candidates = []
+    for path in sorted(_PUZZLES_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, list):
+            continue
+        for puzzle in payload:
+            if isinstance(puzzle, dict) and puzzle.get("fen") and puzzle.get("solution_moves"):
+                puzzle = dict(puzzle)
+                puzzle["_source_file"] = path.name
+                candidates.append(puzzle)
+    return candidates
+
+
+def _puzzle_state() -> dict:
+    if _active_puzzle is None or _puzzle_board is None:
+        return {"error": "No active puzzle"}
+    board = _puzzle_board
+    move_list = []
+    replay = chess.Board(_active_puzzle["fen"])
+    for move in board.move_stack:
+        move_list.append(replay.san(move))
+        replay.push(move)
+    last_move = board.peek().uci() if board.move_stack else None
+    state = {
+        "game_id": "puzzle",
+        "puzzle_mode": True,
+        "fen": board.fen(),
+        "board_display": str(board),
+        "move_list": move_list,
+        "last_move": last_move,
+        "last_move_san": move_list[-1] if move_list else None,
+        "eval_score": None,
+        "player_color": "white" if chess.Board(_active_puzzle["fen"]).turn == chess.WHITE else "black",
+        "target_elo": _active_puzzle.get("difficulty_rating", 1000),
+        "is_game_over": False,
+        "result": None,
+        "legal_moves": [board.san(move) for move in board.legal_moves],
+        "accuracy": {"white": 0.0, "black": 0.0},
+        "session_number": 1,
+        "streak": 0,
+        "lesson_name": "Puzzle",
+        "current_opening": None,
+        "material": _game_service._count_material(board),
+        "captured_pieces": _game_service._get_captured_pieces(board),
+        "is_check": board.is_check(),
+        "is_checkmate": board.is_checkmate(),
+        "is_stalemate": board.is_stalemate(),
+        "move_annotations": [],
+        "puzzle": {
+            "motif": _active_puzzle.get("motif", "tactics"),
+            "difficulty": _active_puzzle.get("difficulty", "intermediate"),
+            "source": _active_puzzle.get("_source_file", "puzzles"),
+            "explanation": _active_puzzle.get("explanation", "Find the strongest move."),
+            "status": "solved" if _puzzle_move_index >= len(_active_puzzle["solution_moves"]) else "in_progress",
+        },
+    }
+    return state
+
+
+def _start_puzzle(difficulty: str = "all", motif: str = "all") -> dict:
+    global _active_puzzle, _puzzle_board, _puzzle_move_index, _puzzle_snapshots, _active_game_id
+    candidates = _load_puzzle_candidates()
+    filtered = [
+        puzzle for puzzle in candidates
+        if (difficulty == "all" or puzzle.get("difficulty") == difficulty)
+        and (motif == "all" or puzzle.get("motif") == motif)
+    ]
+    if not filtered:
+        raise ValueError("No puzzles match those filters")
+    _active_game_id = None
+    _active_puzzle = random.choice(filtered)
+    _puzzle_board = chess.Board(_active_puzzle["fen"])
+    _puzzle_move_index = 0
+    _puzzle_snapshots = [(_puzzle_board.copy(), 0)]
+    return _puzzle_state()
+
+
 def _capture_annotation(before: chess.Board, result: dict) -> dict | None:
     """Describe a black capture made by the move in a compact UI-friendly form."""
     if before.turn != chess.BLACK:
@@ -164,6 +251,39 @@ def _engine_analysis(game_id: str, board: chess.Board | None = None) -> list[dic
     except (OSError, ValueError, RuntimeError, chess.engine.EngineError) as exc:
         _log(f"Coach engine analysis unavailable: {exc}")
         return []
+
+
+def _puzzle_move(uci: str) -> dict:
+    global _puzzle_board, _puzzle_move_index, _puzzle_snapshots
+    if _active_puzzle is None or _puzzle_board is None:
+        raise ValueError("Start a puzzle first")
+    if _puzzle_move_index >= len(_active_puzzle["solution_moves"]):
+        raise ValueError("Puzzle already solved")
+    move = chess.Move.from_uci(uci)
+    if move not in _puzzle_board.legal_moves:
+        raise ValueError("That move is not legal in this position")
+    expected = chess.Move.from_uci(_active_puzzle["solution_moves"][_puzzle_move_index])
+    if move != expected:
+        return {
+            "state": _puzzle_state(),
+            "reply": "That move does not solve the puzzle. Look for the tactical idea and try again.",
+            "correct": False,
+        }
+    _puzzle_snapshots.append((_puzzle_board.copy(), _puzzle_move_index))
+    san = _puzzle_board.san(move)
+    _puzzle_board.push(move)
+    _puzzle_move_index += 1
+    reply = "Correct. Find the next move in the sequence."
+    if _puzzle_move_index < len(_active_puzzle["solution_moves"]):
+        response = chess.Move.from_uci(_active_puzzle["solution_moves"][_puzzle_move_index])
+        if response in _puzzle_board.legal_moves:
+            response_san = _puzzle_board.san(response)
+            _puzzle_board.push(response)
+            _puzzle_move_index += 1
+            reply = f"Correct: {san}. The position replies with {response_san}. Continue the combination."
+    if _puzzle_move_index >= len(_active_puzzle["solution_moves"]):
+        reply = f"Puzzle solved: {san}. {_active_puzzle.get('explanation', '')}"
+    return {"state": _puzzle_state(), "reply": reply, "correct": True}
 
 
 def _model_reply(user_message: str, state: dict, move_context: dict | None = None) -> dict:
@@ -430,6 +550,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             if _active_game_id:
                 with _state_lock:
                     self._serve_payload(_full_state(_active_game_id))
+            elif _active_puzzle is not None:
+                with _state_lock:
+                    self._serve_payload(_puzzle_state())
             else:
                 # Do not display a stale game written by the separate MCP
                 # console process. The dashboard owns its own game session.
@@ -444,7 +567,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self) -> None:
-        global _active_game_id
+        global _active_game_id, _active_puzzle, _puzzle_board, _puzzle_move_index, _puzzle_snapshots
         try:
             payload = _json_body(self)
             with _state_lock:
@@ -457,6 +580,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     player_color = payload.get("player_color", "white")
                     if player_color not in ("white", "black"):
                         raise ValueError("player_color must be white or black")
+                    _active_puzzle = None
+                    _puzzle_board = None
+                    _puzzle_move_index = 0
+                    _puzzle_snapshots = []
                     result = _game_service.new_game(target_elo, player_color)
                     _active_game_id = result["game_id"]
                     _chat_history.clear()
@@ -532,6 +659,29 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     self._serve_payload({"state": state, "evaluation": evaluation, "reply": lesson["message"], "lesson": lesson})
                     return
 
+                if self.path == "/api/puzzle/new":
+                    state = _start_puzzle(
+                        str(payload.get("difficulty", "all")),
+                        str(payload.get("motif", "all")),
+                    )
+                    _chat_history.clear()
+                    self._serve_payload({"state": state, "puzzle": state["puzzle"]})
+                    return
+
+                if self.path == "/api/puzzle/move":
+                    result = _puzzle_move(str(payload.get("move", "")))
+                    self._serve_payload(result, status=200)
+                    return
+
+                if self.path == "/api/puzzle/undo":
+                    if _active_puzzle is None or _puzzle_board is None or len(_puzzle_snapshots) <= 1:
+                        raise ValueError("There is no puzzle move to undo")
+                    snapshot, move_index = _puzzle_snapshots.pop()
+                    _puzzle_board = snapshot.copy()
+                    _puzzle_move_index = move_index
+                    self._serve_payload({"state": _puzzle_state()})
+                    return
+
                 if self.path == "/api/game/engine-move":
                     if not _active_game_id:
                         raise ValueError("Start a game first")
@@ -569,13 +719,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     return
 
                 if self.path == "/api/chat":
-                    if not _active_game_id:
+                    if not _active_game_id and _active_puzzle is None:
                         raise ValueError("Start a game first")
                     message = str(payload.get("message", "")).strip()
                     if not message or len(message) > 4_000:
                         raise ValueError("Message must be between 1 and 4000 characters")
-                    state = _full_state(_active_game_id)
-                    engine_analysis = _engine_analysis(_active_game_id)
+                    state = _full_state(_active_game_id) if _active_game_id else _puzzle_state()
+                    engine_analysis = _engine_analysis(_active_game_id) if _active_game_id else []
                     lesson = _validate_demo_line(
                         _active_game_id,
                         _model_reply(message, state, {"engine_analysis": engine_analysis}),

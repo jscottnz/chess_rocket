@@ -175,6 +175,7 @@
   .setup { margin: 24px auto; max-width: 420px; background: var(--surface); padding: 22px; border-radius: 10px; text-align: left; }
   .setup h2 { margin-bottom: 14px; font-size: 1.05rem; }
   .setup-row { display: flex; gap: 10px; margin-bottom: 12px; }
+  .setup-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .setup label { flex: 1; color: var(--text-dim); font-size: .82rem; }
   .setup select, .setup input, .chat-input { width: 100%; margin-top: 5px; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); }
   button { cursor: pointer; border: 0; border-radius: 5px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 600; }
@@ -249,7 +250,18 @@
           <input id="setup-elo" type="number" min="100" max="3500" step="50" value="800">
         </label>
       </div>
-      <button id="start-game" type="button">Start game</button>
+      <div class="setup-row">
+        <label>Puzzle level
+          <select id="puzzle-difficulty"><option value="all">Any level</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select>
+        </label>
+        <label>Puzzle theme
+          <select id="puzzle-motif"><option value="all">Any theme</option><option value="fork">Fork</option><option value="pin">Pin</option><option value="skewer">Skewer</option><option value="checkmate">Checkmate</option><option value="back_rank_mate">Back rank</option><option value="endgame">Endgame</option></select>
+        </label>
+      </div>
+      <div class="setup-actions">
+        <button id="start-game" type="button">Start game</button>
+        <button id="start-puzzle" type="button" style="background: var(--blue);">Play puzzle</button>
+      </div>
     </div>
   </div>
 </div>
@@ -392,6 +404,7 @@
   let lastFen = null;
   let gameActive = false;
   let movePending = false;
+  let puzzleMode = false;
   let currentLesson = null;
   let lessonIndex = 0;
   let lessonTimer = null;
@@ -524,7 +537,7 @@
     button.disabled = true;
     let completed = false;
     try {
-      const result = await api('/api/game/undo');
+      const result = await api(puzzleMode ? '/api/puzzle/undo' : '/api/game/undo');
       removeLastMoveConversation();
       selectedAnnotationSquare = null;
       window.lastMessageAnnotations = [];
@@ -583,6 +596,7 @@
 
   function renderState(state) {
     if (!state || !state.fen) return;
+    puzzleMode = Boolean(state.puzzle_mode);
     if (!gameActive) initBoard(state.player_color || 'white');
     if (state.fen !== lastFen) { board.position(state.fen, true); lastFen = state.fen; }
     const expectedOrientation = state.player_color === 'black' ? 'black' : 'white';
@@ -728,15 +742,21 @@
     if (movePending) return 'snapback';
     movePending = true;
     document.getElementById('board').classList.add('move-pending');
-    api('/api/game/move', {
+    api(puzzleMode ? '/api/puzzle/move' : '/api/game/move', {
       move: source + target,
-      show_hint: document.getElementById('show-next-hint').checked,
-      explain_engine_move: document.getElementById('explain-engine-move').checked,
+      ...(puzzleMode ? {} : {
+        show_hint: document.getElementById('show-next-hint').checked,
+        explain_engine_move: document.getElementById('explain-engine-move').checked,
+      }),
     }).then(result => {
       renderState(result.state);
-      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
-      applyLessonNotes(result.lesson);
-      setLesson(result.lesson);
+      if (puzzleMode) {
+        addChat('assistant', result.reply, result.state);
+      } else {
+        addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+        applyLessonNotes(result.lesson);
+        setLesson(result.lesson);
+      }
     }).catch(error => {
       if (lastFen) board.position(lastFen, true);
       addChat('assistant', error.message);
@@ -784,6 +804,23 @@
     } catch (error) { addChat('assistant', error.message); button.disabled = false; }
   }
 
+  async function startPuzzle() {
+    const button = document.getElementById('start-puzzle');
+    button.disabled = true;
+    try {
+      const result = await api('/api/puzzle/new', {
+        difficulty: document.getElementById('puzzle-difficulty').value,
+        motif: document.getElementById('puzzle-motif').value,
+      });
+      renderState(result.state);
+      const puzzle = result.state.puzzle || {};
+      addChat('assistant', `Puzzle: ${puzzle.motif || 'tactics'} (${puzzle.difficulty || 'mixed'}). Find the strongest move. Ask me for an explanation after you try.`, result.state);
+    } catch (error) {
+      addChat('assistant', error.message);
+      button.disabled = false;
+    }
+  }
+
   function capturedToUnicode(pieces, color) {
     if (!pieces || !pieces.length) return '';
     return pieces.map(p => {
@@ -803,7 +840,9 @@
 
     // Board info
     document.getElementById('player-info').textContent = 'Playing as: ' + capitalize(state.player_color || 'white');
-    document.getElementById('engine-info').textContent = 'Engine: ' + (state.target_elo || 800) + ' Elo';
+    document.getElementById('engine-info').textContent = state.puzzle_mode
+      ? 'Puzzle: ' + ((state.puzzle && state.puzzle.motif) || 'tactics')
+      : 'Engine: ' + (state.target_elo || 800) + ' Elo';
     if (Object.prototype.hasOwnProperty.call(state, 'black_capture')) {
       const captureAlert = document.getElementById('capture-alert');
       const capture = state.black_capture;
@@ -967,6 +1006,7 @@
 
   setInterval(poll, 500);
   document.getElementById('start-game').addEventListener('click', startGame);
+  document.getElementById('start-puzzle').addEventListener('click', startPuzzle);
   poll();
 })();
 </script>
