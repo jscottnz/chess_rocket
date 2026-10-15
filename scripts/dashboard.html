@@ -44,13 +44,13 @@
     gap: 16px;
     padding: 16px;
     max-width: 1200px;
-    height: calc(100vh - 62px);
-    min-height: 0;
+    height: auto;
+    min-height: 100vh;
     margin: 0 auto;
-    overflow: hidden;
+    overflow: visible;
   }
   .left-column, .right-column { min-width: 0; min-height: 0; }
-  .left-column { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .left-column { display: flex; flex-direction: column; gap: 10px; overflow: visible; }
   .board-col { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
   .board-wrapper { width: min(100%, calc(100vh - 355px)); aspect-ratio: 1; position: relative; margin: 0 auto; }
   #board { width: 100% !important; height: auto !important; }
@@ -82,12 +82,24 @@
   .message-piece { fill: none; stroke: rgba(33, 150, 243, .58); stroke-width: .07; }
   .message-selected-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .95); stroke-width: .08; }
   .message-selected-piece { fill: none; stroke: rgba(255, 193, 7, .95); stroke-width: .09; }
+  .message-move-arrow { fill: none; stroke-width: .09; stroke-linecap: round; opacity: .58; transition: opacity .12s, stroke-width .12s; }
+  .message-move-arrow.white { stroke: #81c784; }
+  .message-move-arrow.black { stroke: #ffab91; }
+  .message-move-arrow.emphasised { stroke-width: .16; opacity: 1; }
+  .message-move-square { stroke-width: .055; opacity: .48; }
+  .message-move-square.white { fill: rgba(129, 199, 132, .17); stroke: #81c784; }
+  .message-move-square.black { fill: rgba(255, 171, 145, .17); stroke: #ffab91; }
+  .message-move-square.emphasised { opacity: .9; stroke-width: .09; }
   .board-info {
     display: flex; justify-content: space-between;
     font-size: 0.85rem; color: var(--text-dim);
   }
-  .board-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+  .board-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; }
   .undo-button { padding: 5px 10px; font-size: .78rem; background: var(--surface2); }
+  .copy-button { padding: 5px 10px; font-size: .78rem; background: var(--blue); }
+  .end-game-button { padding: 5px 10px; font-size: .78rem; background: var(--accent); }
+  .reset-puzzle-button { display: none; padding: 5px 10px; font-size: .78rem; background: var(--blue); }
+  .reset-puzzle-button.visible { display: inline-block; }
   .capture-alert { display: none; margin-top: 4px; padding: 5px 8px; border-left: 3px solid var(--orange); border-radius: 4px; background: rgba(255, 152, 0, .13); color: #ffcc80; font-size: .82rem; font-weight: 700; }
   .capture-alert.visible { display: block; }
   .stats-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; overflow-y: auto; padding-right: 3px; }
@@ -180,8 +192,8 @@
   .setup select, .setup input, .chat-input { width: 100%; margin-top: 5px; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); }
   button { cursor: pointer; border: 0; border-radius: 5px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 600; }
   button:disabled { opacity: .55; cursor: wait; }
-  .right-column { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "chat notes"; gap: 10px; min-height: 0; }
-  .chat-panel { grid-area: chat; display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; }
+  .right-column { height: max(calc(100vh - 94px), 520px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "chat notes"; gap: 10px; min-height: 0; }
+  .chat-panel { grid-area: chat; display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
   .notes-panel { grid-area: notes; display: flex; flex-direction: column; min-height: 0; }
   .notes-help { color: var(--text-dim); font-size: .78rem; line-height: 1.35; margin-bottom: 8px; }
   .notes-input { flex: 1; min-height: 180px; width: 100%; resize: vertical; padding: 9px; border: 1px solid var(--surface2); border-radius: 5px; background: var(--bg); color: var(--text); font: inherit; line-height: 1.4; }
@@ -197,6 +209,9 @@
   .chat-token-annotation { cursor: pointer; transition: box-shadow .12s, outline .12s; }
   .chat-token-annotation:hover, .chat-token-annotation.selected { outline: 1px solid rgba(255, 193, 7, .85); box-shadow: 0 0 0 2px rgba(255, 193, 7, .14); }
   .chat-token-jargon { color: #80cbc4; background: rgba(0, 150, 136, .16); border-bottom: 1px dotted #80cbc4; }
+  .chat-token-move { border-radius: 3px; padding: 0 3px; font-weight: 700; }
+  .chat-token-move.white { color: #b9f6ca; background: rgba(129, 199, 132, .15); }
+  .chat-token-move.black { color: #ffccbc; background: rgba(255, 171, 145, .15); }
   .chat-token-piece.king { color: #ffd54f; background: rgba(255, 193, 7, .14); }
   .chat-token-piece.queen { color: #f48fb1; background: rgba(233, 69, 96, .14); }
   .chat-token-piece.rook { color: #81d4fa; background: rgba(33, 150, 243, .14); }
@@ -213,7 +228,7 @@
   .lesson-controls button { padding: 5px 9px; font-size: .75rem; }
   #lesson-title { flex: 1; }
   @media (max-width: 760px) {
-    .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 62px); overflow: visible; }
+    .main { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow: visible; }
     .board-wrapper { width: min(100%, 72vh); }
     .left-column { overflow: visible; }
     .stats-panels { overflow: visible; }
@@ -228,14 +243,6 @@
 </style>
 </head>
 <body>
-
-<header>
-  <h1><span>Chess Rocket</span> Dashboard</h1>
-  <div class="header-stats">
-    <span id="session-info">Session #--</span>
-    <span id="streak-info">Streak: --</span>
-  </div>
-</header>
 
 <div class="main" id="main-content">
   <div class="waiting" id="waiting">
@@ -276,17 +283,26 @@
           <defs>
             <marker id="arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#e94560"></path></marker>
             <marker id="last-arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#4caf50"></path></marker>
+            <marker id="message-white-arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#81c784"></path></marker>
+            <marker id="message-black-arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#ffab91"></path></marker>
           </defs>
           <g id="last-move-drawing"></g>
           <g id="message-highlights"></g>
+          <g id="message-move-highlights"></g>
           <g id="overlay-drawing"></g>
         </svg>
       </div>
       <div class="board-info">
         <span id="player-info">Playing as: White</span>
         <span id="engine-info">Engine: 800 Elo</span>
+        <span class="board-actions">
+          <button type="button" class="reset-puzzle-button" id="reset-puzzle">Reset</button>
+          <button type="button" class="undo-button" id="undo-move" disabled>Undo</button>
+          <button type="button" class="copy-button" id="copy-pgn" title="Copy the game as PGN">Copy PGN</button>
+          <button type="button" class="copy-button" id="copy-fen" title="Copy the current board position as FEN">Copy FEN</button>
+          <button type="button" class="end-game-button" id="end-game">End game</button>
+        </span>
       </div>
-      <div class="board-actions"><button type="button" class="undo-button" id="undo-move" disabled>Undo move</button></div>
       <div class="capture-alert" id="capture-alert" aria-live="polite"></div>
     </div>
     <div class="stats-panels">
@@ -410,6 +426,8 @@
   let lessonTimer = null;
   let selectedAnnotationSquare = null;
   let jargonExplanation = null;
+  let hoveredMoveAnnotation = null;
+  let currentState = null;
 
   function initBoard(orientation) {
     const main = document.getElementById('main-content');
@@ -428,6 +446,10 @@
     loadNotes();
     document.getElementById('notes-save').addEventListener('click', saveNotes);
     document.getElementById('undo-move').addEventListener('click', undoMove);
+    document.getElementById('copy-pgn').addEventListener('click', copyPgn);
+    document.getElementById('copy-fen').addEventListener('click', copyFen);
+    document.getElementById('reset-puzzle').addEventListener('click', resetPuzzle);
+    document.getElementById('end-game').addEventListener('click', endGame);
     document.getElementById('notes-add-explanation').addEventListener('click', addJargonExplanationToNotes);
     document.getElementById('notes-input').addEventListener('keydown', event => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -452,6 +474,18 @@
       drawMessageHighlights(null, window.lastMessageAnnotations || []);
       const boardElement = document.getElementById('board');
       if (boardElement && window.innerWidth < 760) boardElement.scrollIntoView({behavior: 'smooth', block: 'center'});
+    });
+    document.getElementById('chat-messages').addEventListener('mouseover', event => {
+      const target = event.target.closest('[data-move-uci]');
+      if (!target) return;
+      hoveredMoveAnnotation = moveAnnotationFromElement(target);
+      drawMessageMoveHighlights(window.lastMessageMoveAnnotations || [], hoveredMoveAnnotation);
+    });
+    document.getElementById('chat-messages').addEventListener('mouseout', event => {
+      const target = event.target.closest('[data-move-uci]');
+      if (!target || target.contains(event.relatedTarget)) return;
+      hoveredMoveAnnotation = null;
+      drawMessageMoveHighlights(window.lastMessageMoveAnnotations || []);
     });
     document.getElementById('chat-messages').addEventListener('keydown', event => {
       const jargonTarget = event.target.closest('[data-jargon-term]');
@@ -482,7 +516,13 @@
       headers: body === undefined ? {} : {'Content-Type': 'application/json'},
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const result = await response.json();
+    const raw = await response.text();
+    let result;
+    try {
+      result = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      throw new Error(`Dashboard returned HTTP ${response.status} for ${path}. Restart the dashboard server if this route was added recently.`);
+    }
     if (!response.ok || result.error) throw new Error(result.error || 'Request failed');
     return result;
   }
@@ -537,7 +577,7 @@
     button.disabled = true;
     let completed = false;
     try {
-      const result = await api(puzzleMode ? '/api/puzzle/undo' : '/api/game/undo');
+        const result = await api(puzzleMode ? '/api/puzzle/undo' : '/api/game/undo', {});
       removeLastMoveConversation();
       selectedAnnotationSquare = null;
       window.lastMessageAnnotations = [];
@@ -550,6 +590,87 @@
       addChat('assistant', error.message);
     } finally {
       if (!completed) button.disabled = false;
+    }
+  }
+
+  async function resetPuzzle() {
+    if (!puzzleMode || movePending) return;
+    const button = document.getElementById('reset-puzzle');
+    button.disabled = true;
+    try {
+      const result = await api('/api/puzzle/reset', {});
+      selectedAnnotationSquare = null;
+      window.lastMessageAnnotations = [];
+      document.getElementById('message-highlights').innerHTML = '';
+      setLesson(null);
+      // A reset can return to a FEN previously rendered in this session.
+      // Clear the cache so chessboard.js always redraws the starting position.
+      lastFen = null;
+      renderState(result.state);
+      addChat('assistant', 'Puzzle reset. Find the strongest move.', result.state);
+    } catch (error) {
+      addChat('assistant', error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function endGame() {
+    if (movePending) return;
+    const button = document.getElementById('end-game');
+    button.disabled = true;
+    try {
+      await api(puzzleMode ? '/api/puzzle/end' : '/api/game/end', {});
+      window.location.reload();
+    } catch (error) {
+      addChat('assistant', error.message);
+      button.disabled = false;
+    }
+  }
+
+  async function copyText(text) {
+    if (!text) throw new Error('Nothing to copy');
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const input = document.createElement('textarea');
+    input.value = text;
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    const copied = document.execCommand('copy');
+    input.remove();
+    if (!copied) throw new Error('Clipboard access was unavailable');
+  }
+
+  async function copyFEN() {
+    const button = document.getElementById('copy-fen');
+    if (!currentState || !currentState.fen) return;
+    button.disabled = true;
+    try {
+      await copyText(currentState.fen);
+      button.textContent = 'FEN copied';
+    } catch (error) {
+      addChat('assistant', 'Could not copy the FEN: ' + error.message);
+    } finally {
+      window.setTimeout(() => { button.textContent = 'Copy FEN'; button.disabled = false; }, 1400);
+    }
+  }
+
+  async function copyPgn() {
+    const button = document.getElementById('copy-pgn');
+    if (!currentState || currentState.puzzle_mode) return;
+    button.disabled = true;
+    try {
+      const exported = await api('/api/game/export');
+      await copyText(exported.pgn);
+      button.textContent = 'PGN copied';
+    } catch (error) {
+      addChat('assistant', 'Could not copy the PGN: ' + error.message);
+    } finally {
+      window.setTimeout(() => { button.textContent = 'Copy PGN'; button.disabled = Boolean(currentState && currentState.puzzle_mode); }, 1400);
     }
   }
 
@@ -569,7 +690,7 @@
     button.disabled = true;
     try {
       const result = await api('/api/chat', {message: request});
-      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon, result.lesson && result.lesson.move_annotations);
       applyLessonNotes(result.lesson);
       setLesson(result.lesson);
       renderState(result.state);
@@ -596,6 +717,7 @@
 
   function renderState(state) {
     if (!state || !state.fen) return;
+    currentState = state;
     puzzleMode = Boolean(state.puzzle_mode);
     if (!gameActive) initBoard(state.player_color || 'white');
     if (state.fen !== lastFen) { board.position(state.fen, true); lastFen = state.fen; }
@@ -603,27 +725,39 @@
     if (board.orientation() !== expectedOrientation) board.orientation(expectedOrientation);
     updatePanels(state);
     drawLastMove(state);
+    drawMessageMoveHighlights(window.lastMessageMoveAnnotations || [], hoveredMoveAnnotation);
     const undoButton = document.getElementById('undo-move');
     if (undoButton) undoButton.disabled = !state.move_list || state.move_list.length === 0 || movePending;
+    const resetButton = document.getElementById('reset-puzzle');
+    if (resetButton) resetButton.classList.toggle('visible', Boolean(state.puzzle_mode));
+    const endButton = document.getElementById('end-game');
+    if (endButton) endButton.textContent = state.puzzle_mode ? 'End puzzle' : 'End game';
+    const copyPgnButton = document.getElementById('copy-pgn');
+    if (copyPgnButton) copyPgnButton.disabled = Boolean(state.puzzle_mode);
   }
 
-  function addChat(role, text, state, annotations, jargon) {
+  function addChat(role, text, state, annotations, jargon, moveAnnotations) {
     const messages = document.getElementById('chat-messages');
     if (!messages || !text) return;
     const el = document.createElement('div');
     el.className = 'chat-message ' + role;
     if (role === 'assistant') {
       window.lastMessageAnnotations = annotations || [];
+      window.lastMessageMoveAnnotations = moveAnnotations || [];
       selectedAnnotationSquare = null;
-      el.innerHTML = formatChatText(text, annotations || [], jargon || []);
+      hoveredMoveAnnotation = null;
+      el.innerHTML = formatChatText(text, annotations || [], jargon || [], moveAnnotations || []);
     }
     else el.textContent = text;
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
-    if (role === 'assistant' && state) drawMessageHighlights(state, annotations || []);
+    if (role === 'assistant' && state) {
+      drawMessageHighlights(state, annotations || []);
+      drawMessageMoveHighlights(moveAnnotations || []);
+    }
   }
 
-  function formatChatText(text, annotations, jargon) {
+  function formatChatText(text, annotations, jargon, moveAnnotations) {
     const marks = (annotations || [])
       .filter(annotation => annotation.text)
       .map(annotation => {
@@ -634,8 +768,12 @@
         const start = text.toLowerCase().indexOf(annotation.text.toLowerCase());
         return {...annotation, markType: 'jargon', start, end: start + annotation.text.length};
       }))
+      .concat((moveAnnotations || []).filter(annotation => annotation.text && annotation.uci).map(annotation => {
+        const start = text.toLowerCase().indexOf(annotation.text.toLowerCase());
+        return {...annotation, markType: 'move', start, end: start + annotation.text.length};
+      }))
       .filter(annotation => annotation.start >= 0)
-      .sort((a, b) => a.start - b.start);
+      .sort((a, b) => a.start - b.start || (a.markType === 'move' ? -1 : 1));
     let result = '';
     let cursor = 0;
     marks.forEach(annotation => {
@@ -643,6 +781,13 @@
       result += esc(text.slice(cursor, annotation.start));
       if (annotation.markType === 'jargon') {
         result += `<span class="chat-token-annotation chat-token-jargon" role="button" tabindex="0" data-jargon-term="${esc(annotation.term)}" title="Explain ${esc(annotation.term)}">${esc(text.slice(annotation.start, annotation.end))}</span>`;
+        cursor = annotation.end;
+        return;
+      }
+      if (annotation.markType === 'move') {
+        const color = annotation.color === 'black' ? 'black' : 'white';
+        const uci = annotation.uci.toLowerCase();
+        result += `<span class="chat-token-move ${color}" role="button" tabindex="0" data-move-uci="${esc(uci)}" data-move-color="${color}" title="Show ${esc(text.slice(annotation.start, annotation.end))} on the board">${esc(text.slice(annotation.start, annotation.end))}</span>`;
         cursor = annotation.end;
         return;
       }
@@ -688,6 +833,27 @@
       selectedMarkup = `<rect class="message-selected-square" x="${point.x - .5}" y="${point.y - .5}" width="1" height="1"></rect><circle class="message-selected-piece" cx="${point.x}" cy="${point.y}" r=".39"></circle>`;
     }
     group.innerHTML = locationMarkup + pieceMarkup + selectedMarkup;
+  }
+
+  function moveAnnotationFromElement(element) {
+    return {uci: element.dataset.moveUci, color: element.dataset.moveColor};
+  }
+
+  function drawMessageMoveHighlights(moveAnnotations, emphasisedMove) {
+    const group = document.getElementById('message-move-highlights');
+    if (!group || !board) return;
+    group.innerHTML = (moveAnnotations || []).map(annotation => {
+      const uci = String(annotation.uci || '').toLowerCase();
+      if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) return '';
+      const color = annotation.color === 'black' ? 'black' : 'white';
+      const emphasised = emphasisedMove && emphasisedMove.uci === uci && emphasisedMove.color === color;
+      const emphasisClass = emphasised ? ' emphasised' : '';
+      const from = squarePoint(uci.slice(0, 2), board.orientation());
+      const to = squarePoint(uci.slice(2, 4), board.orientation());
+      return `<rect class="message-move-square ${color}${emphasisClass}" x="${from.x - .5}" y="${from.y - .5}" width="1" height="1"></rect>` +
+        `<rect class="message-move-square ${color}${emphasisClass}" x="${to.x - .5}" y="${to.y - .5}" width="1" height="1"></rect>` +
+        `<line class="message-move-arrow ${color}${emphasisClass}" marker-end="url(#message-${color}-arrow-head)" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"></line>`;
+    }).join('');
   }
 
   function setLesson(lesson) {
@@ -753,7 +919,7 @@
       if (puzzleMode) {
         addChat('assistant', result.reply, result.state);
       } else {
-        addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+        addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon, result.lesson && result.lesson.move_annotations);
         applyLessonNotes(result.lesson);
         setLesson(result.lesson);
       }
@@ -779,7 +945,7 @@
     button.disabled = true;
     try {
       const result = await api('/api/chat', {message});
-      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon);
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon, result.lesson && result.lesson.move_annotations);
       applyLessonNotes(result.lesson);
       setLesson(result.lesson);
       renderState(result.state);
@@ -798,7 +964,7 @@
       renderState(result.state);
       addChat('assistant', 'I\'m ready. Make your first move, or ask me anything about the position.');
       if (result.state.player_color === 'black') {
-        const move = await api('/api/game/engine-move').catch(() => null);
+      const move = await api('/api/game/engine-move', {}).catch(() => null);
         if (move) renderState(move.state);
       }
     } catch (error) { addChat('assistant', error.message); button.disabled = false; }
@@ -834,9 +1000,11 @@
 
   function updatePanels(state) {
     // Header
-    document.getElementById('session-info').textContent = 'Session #' + (state.session_number || 1);
+    const sessionInfo = document.getElementById('session-info');
+    if (sessionInfo) sessionInfo.textContent = 'Session #' + (state.session_number || 1);
     const streak = state.streak || 0;
-    document.getElementById('streak-info').textContent = 'Streak: ' + streak + (streak >= 3 ? ' \uD83D\uDD25' : '');
+    const streakInfo = document.getElementById('streak-info');
+    if (streakInfo) streakInfo.textContent = 'Streak: ' + streak + (streak >= 3 ? ' \uD83D\uDD25' : '');
 
     // Board info
     document.getElementById('player-info').textContent = 'Playing as: ' + capitalize(state.player_color || 'white');

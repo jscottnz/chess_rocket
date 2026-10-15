@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import chess
+import chess.pgn
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT / "data"
@@ -99,6 +100,20 @@ _COACH_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "move_annotations": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "uci": {"type": "string"},
+                    "color": {"type": "string", "enum": ["white", "black"]},
+                },
+                "required": ["text", "uci", "color"],
+                "additionalProperties": False,
+            },
+        },
         "jargon": {
             "type": "array",
             "maxItems": 12,
@@ -122,7 +137,7 @@ _COACH_SCHEMA = {
             "additionalProperties": False,
         },
     },
-    "required": ["message", "demo_title", "demo_moves", "annotations", "jargon", "notes_update"],
+    "required": ["message", "demo_title", "demo_moves", "annotations", "move_annotations", "jargon", "notes_update"],
     "additionalProperties": False,
 }
 
@@ -133,6 +148,34 @@ def _full_state(game_id: str) -> dict:
     if game is None:
         return {"error": f"Game not found: {game_id}"}
     return _game_service._build_game_state(game_id, game)
+
+
+def _game_export(game_id: str) -> dict:
+    """Return the current game in portable board-state and PGN formats."""
+    game = _game_service._games.get(game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    board = game["board"]
+    record = chess.pgn.Game.from_board(board)
+    player_color = game.get("player_color", "white")
+    record.headers["White"] = "Player" if player_color == "white" else "Chess Rocket"
+    record.headers["Black"] = "Player" if player_color == "black" else "Chess Rocket"
+    record.headers["Result"] = board.result() if board.is_game_over() else "*"
+    return {"fen": board.fen(), "pgn": str(record).strip()}
+
+
+def _end_active_game() -> None:
+    """Save and release the dashboard-owned game, if one is active."""
+    global _active_game_id
+    if not _active_game_id:
+        return
+    game = _game_service._games.get(_active_game_id)
+    if game is not None:
+        if game["board"].move_stack:
+            _game_service._auto_save_pgn(_active_game_id, game)
+        game["engine"].close()
+        _game_service._games.pop(_active_game_id, None)
+    _active_game_id = None
 
 
 def _load_puzzle_candidates() -> list[dict]:
@@ -150,6 +193,19 @@ def _load_puzzle_candidates() -> list[dict]:
                 puzzle["_source_file"] = path.name
                 candidates.append(puzzle)
     return candidates
+
+
+def _puzzle_explanation(puzzle: dict) -> str:
+    """Return a player-facing explanation without stale source-game evaluation."""
+    explanation = str(puzzle.get("explanation", "")).strip()
+    # Puzzles derived from earlier games retain a record of the original missed
+    # move. That is useful provenance, but it must not be presented as though
+    # the player made that move while solving this puzzle.
+    explanation = re.sub(r"\bIn your game, you played .*?(?:\.\s*|$)", "", explanation, flags=re.IGNORECASE).strip()
+    if explanation:
+        return explanation
+    motif = str(puzzle.get("motif", "tactic")).strip() or "tactic"
+    return f"You found the intended {motif}."
 
 
 def _puzzle_state() -> dict:
@@ -191,7 +247,7 @@ def _puzzle_state() -> dict:
             "motif": _active_puzzle.get("motif", "tactics"),
             "difficulty": _active_puzzle.get("difficulty", "intermediate"),
             "source": _active_puzzle.get("_source_file", "puzzles"),
-            "explanation": _active_puzzle.get("explanation", "Find the strongest move."),
+            "explanation": _puzzle_explanation(_active_puzzle),
             "status": "solved" if _puzzle_move_index >= len(_active_puzzle["solution_moves"]) else "in_progress",
         },
     }
@@ -282,8 +338,26 @@ def _puzzle_move(uci: str) -> dict:
             _puzzle_move_index += 1
             reply = f"Correct: {san}. The position replies with {response_san}. Continue the combination."
     if _puzzle_move_index >= len(_active_puzzle["solution_moves"]):
-        reply = f"Puzzle solved: {san}. {_active_puzzle.get('explanation', '')}"
+        reply = f"Puzzle solved: {san}. {_puzzle_explanation(_active_puzzle)}"
     return {"state": _puzzle_state(), "reply": reply, "correct": True}
+
+
+def _board_facts(fen: str | None) -> dict:
+    """Create a concrete, model-readable inventory of the current position."""
+    try:
+        board = chess.Board(fen)
+    except (TypeError, ValueError):
+        return {"pieces": {}, "legal_moves": []}
+    pieces = {
+        chess.square_name(square): (
+            ("white " if piece.color else "black ") + chess.piece_name(piece.piece_type)
+        )
+        for square, piece in board.piece_map().items()
+    }
+    return {
+        "pieces": pieces,
+        "legal_moves": [board.san(move) for move in board.legal_moves],
+    }
 
 
 def _model_reply(user_message: str, state: dict, move_context: dict | None = None) -> dict:
@@ -301,11 +375,16 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "moves": state.get("move_list", []),
         "player_color": state.get("player_color"),
         "target_elo": state.get("target_elo"),
+        "board_facts": _board_facts(state.get("fen")),
     }
     if move_context:
         position["last_move_evaluation"] = move_context
         position["engine_analysis"] = move_context.get("engine_analysis", [])
-        position["coach_move_analysis"] = move_context.get("pre_engine_analysis", [])
+        # This analysis is from before the coach reply. It is deliberately
+        # separate from the player's move evaluation, which is the only move
+        # the automatic coaching note is meant to assess.
+        position["coach_reply"] = move_context.get("coach_reply", "")
+        position["coach_reply_analysis"] = move_context.get("pre_engine_analysis", [])
 
     history = "\n".join(
         f"{item['role'].title()}: {item['content']}" for item in _chat_history[-10:]
@@ -323,8 +402,33 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "private coaching signals, not language to repeat to the player. Explain one actionable idea "
         "and use the private position analysis when supplied. The position and chess state "
         "below are authoritative. "
-        "After the player makes a move, do not volunteer the next best move or tell them "
-        "what to play. Explain the consequences of their move and what to inspect next. "
+        "Board verification is mandatory: before making any factual chess claim, check "
+        "the Board facts inventory below. Never say that a piece is on a square, is "
+        "blocked by a piece, attacks or defends something, or can/cannot make a move "
+        "unless the inventory and legal_moves support it. Do not infer a pawn or piece "
+        "on a square merely because it is common in an opening. If the facts do not "
+        "settle a claim, omit the claim or phrase it as a question for the player. "
+        "After the player makes a move, normally do not volunteer the next best move "
+        "or tell them what to play: explain the consequences and what to inspect next. "
+        "For an automatic post-move note, last_move_evaluation applies only to the "
+        "player's move. Focus the assessment on that move, not on the coach reply "
+        "that followed it. You may mention the coach reply by name to orient the "
+        "player, but do not assign it a plan, threat, purpose, pressure, or positional "
+        "effect unless coach_reply_analysis specifically contains that exact reply as "
+        "its first PV move. If it is not supported there, either omit the reply or state "
+        "only the literal piece movement; never invent a plausible-sounding explanation. "
+        "When the player asks a direct chess question, answer that question first and "
+        "do not frame the answer as feedback on an earlier move. In particular, never "
+        "say 'A stronger choice was …' unless last_move_evaluation explicitly exists "
+        "and its classification is mistake or blunder. Do not describe a move as "
+        "stronger, best, or an improvement merely because the player asked whether it "
+        "is legal or what would happen after it. "
+        "There is one required exception: when last_move_evaluation.classification "
+        "is mistake or blunder, name the stronger move from "
+        "last_move_evaluation.best_move and briefly explain what it achieves. Keep "
+        "the language constructive: say the played move weakened the position because "
+        "of a concrete reason, then say 'A stronger choice was … because …'. Do not "
+        "use the labels mistake or blunder in the player-facing message. "
         "Only give a concrete move recommendation or variation when the player explicitly "
         "asks what to play, asks for the best move, requests a recommendation, or asks "
         "to see a line. "
@@ -340,7 +444,7 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "When the player asks for a recommendation, first use the private analysis "
         "to select the sound candidate, then explain why it works and what the player "
         "should watch for afterward. "
-        "not claim to have changed the board. If a concrete variation or idea is "
+        "Do not claim to have changed the board. If a concrete variation or idea is "
         "helpful, include up to 8 legal SAN moves starting from the exact current "
         "position in demo_moves; otherwise use an empty array. Also return explicit "
         "annotations for board references in your message. Each annotation's text "
@@ -348,6 +452,11 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "its square. For a piece phrase such as 'your bishop', use kind piece and "
         "the exact square of that specific piece; never annotate every piece of a "
         "type. If you cannot identify the exact piece, omit the annotation. Return "
+        "move_annotations for every concrete move mentioned in your message. Each "
+        "move annotation must have text that is an exact phrase from message, its "
+        "four- or five-character UCI move (for example e2e4 or e7e8q), and the "
+        "moving side's color. Include moves from the played game and any line you "
+        "describe, so the dashboard can draw the exact from and to squares. "
         "jargon annotations for specialized chess terms in your message. Each jargon "
         "annotation must have text as an exact phrase from message and term as the "
         "short term to explain. Do not annotate ordinary words like move, piece, or "
@@ -420,14 +529,14 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
                         try:
                             lesson = json.loads(item.get("text", ""))
                         except json.JSONDecodeError:
-                            lesson = {"message": item.get("text", ""), "demo_title": "", "demo_moves": [], "annotations": []}
+                            lesson = {"message": item.get("text", ""), "demo_title": "", "demo_moves": [], "annotations": [], "move_annotations": []}
                         break
             if result.returncode != 0 and not lesson:
                 detail = result.stderr.strip() or f"codex exited with status {result.returncode}"
                 _log(f"Codex request failed: {detail}")
-                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
+                lesson = {"message": f"Local Codex is unavailable: {detail}", "demo_title": "", "demo_moves": [], "annotations": [], "move_annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
             if not isinstance(lesson, dict):
-                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
+                lesson = {"message": "I couldn't produce a coaching note.", "demo_title": "", "demo_moves": [], "annotations": [], "move_annotations": [], "jargon": [], "notes_update": {"action": "none", "text": ""}}
             notes_update = lesson.get("notes_update", {})
             if isinstance(notes_update, dict) and notes_update.get("action") == "replace":
                 _save_notes(str(notes_update.get("text", "")))
@@ -444,12 +553,13 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
                 "demo_title": str(lesson.get("demo_title", "")),
                 "demo_moves": [str(move) for move in lesson.get("demo_moves", [])][:8],
                 "annotations": lesson.get("annotations", []) if isinstance(lesson.get("annotations", []), list) else [],
+                "move_annotations": lesson.get("move_annotations", []) if isinstance(lesson.get("move_annotations", []), list) else [],
                 "jargon": jargon[:12],
                 "notes": _load_notes(),
             }
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             _log(f"Codex request exception: {exc}")
-            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": [], "annotations": [], "jargon": [], "notes": _load_notes()}
+            return {"message": f"Local Codex is unavailable: {exc}", "demo_title": "", "demo_moves": [], "annotations": [], "move_annotations": [], "jargon": [], "notes": _load_notes()}
 
 
 def _validate_demo_line(
@@ -487,6 +597,7 @@ def _validate_demo_line(
             validated = []
     lesson["demo_moves"] = validated
     _validate_annotations(game_id, lesson, state)
+    _validate_move_annotations(game_id, lesson)
     return lesson
 
 
@@ -518,6 +629,47 @@ def _validate_annotations(game_id: str, lesson: dict, state: dict) -> None:
                 continue
         valid.append({"text": text, "kind": kind, "square": square, "piece": piece, "color": color})
     lesson["annotations"] = valid
+
+
+def _validate_move_annotations(game_id: str, lesson: dict) -> None:
+    """Keep only move references that can be mapped to real board squares."""
+    game = _game_service._games.get(game_id)
+    message = str(lesson.get("message", ""))
+    annotations = lesson.get("move_annotations", [])
+    if game is None or not isinstance(annotations, list):
+        lesson["move_annotations"] = []
+        return
+
+    known_moves: dict[str, str] = {}
+    replay = chess.Board(game["starting_fen"])
+    for move in game["board"].move_stack:
+        known_moves[move.uci()] = "white" if replay.turn else "black"
+        replay.push(move)
+    for move in game["board"].legal_moves:
+        known_moves.setdefault(move.uci(), "white" if game["board"].turn else "black")
+    demo_color = "white" if game["board"].turn else "black"
+    for move in lesson.get("demo_moves", []):
+        if isinstance(move, dict) and re.fullmatch(r"[a-h][1-8][a-h][1-8][qrbn]?", str(move.get("uci", ""))):
+            known_moves.setdefault(str(move["uci"]), demo_color)
+            demo_color = "black" if demo_color == "white" else "white"
+
+    valid = []
+    for annotation in annotations[:8]:
+        if not isinstance(annotation, dict):
+            continue
+        text = str(annotation.get("text", "")).strip()
+        uci = str(annotation.get("uci", "")).lower()
+        color = str(annotation.get("color", "")).lower()
+        if (
+            not text
+            or not re.search(re.escape(text), message, re.IGNORECASE)
+            or not re.fullmatch(r"[a-h][1-8][a-h][1-8][qrbn]?", uci)
+            or color not in ("white", "black")
+            or known_moves.get(uci) != color
+        ):
+            continue
+        valid.append({"text": text, "uci": uci, "color": color})
+    lesson["move_annotations"] = valid
 
 
 def _requests_demo_line(message: str) -> bool:
@@ -563,6 +715,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._serve_payload({"notes": _load_notes()})
         elif self.path == "/api/chat/history":
             self._serve_payload({"messages": _chat_history})
+        elif self.path == "/api/game/export":
+            if not _active_game_id:
+                self._serve_payload({"error": "Start a game first"}, status=400)
+            else:
+                self._serve_payload(_game_export(_active_game_id))
         else:
             self.send_error(404)
 
@@ -580,6 +737,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     player_color = payload.get("player_color", "white")
                     if player_color not in ("white", "black"):
                         raise ValueError("player_color must be white or black")
+                    _end_active_game()
                     _active_puzzle = None
                     _puzzle_board = None
                     _puzzle_move_index = 0
@@ -589,6 +747,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     _chat_history.clear()
                     state = _full_state(_active_game_id)
                     self._serve_payload({"state": state, "message": "Game started."})
+                    return
+
+                if self.path == "/api/game/end":
+                    _end_active_game()
+                    _chat_history.clear()
+                    self._serve_payload({"ended": True})
+                    return
+
+                if self.path == "/api/puzzle/end":
+                    _active_puzzle = None
+                    _puzzle_board = None
+                    _puzzle_move_index = 0
+                    _puzzle_snapshots = []
+                    _chat_history.clear()
+                    self._serve_payload({"ended": True})
                     return
 
                 if self.path == "/api/game/move":
@@ -635,6 +808,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                         state = _full_state(_active_game_id)
                     state["black_capture"] = capture
                     engine_analysis = _engine_analysis(_active_game_id)
+                    # Keep the automatic note centered on the player's evaluated
+                    # move. Pre-reply analysis is supplied only when the player
+                    # explicitly asks for an explanation of the coach's reply.
                     coach_prompt = (
                         f"The player played {san}. Give a brief coaching explanation, "
                         "then mention what to look for in the next position."
@@ -645,6 +821,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                         "cp_loss": evaluation.get("cp_loss"),
                         "best_move": evaluation.get("best_move_san"),
                         "engine_move": engine_move_san,
+                        "coach_reply": engine_move_san,
                         "explain_engine_move": bool(payload.get("explain_engine_move", False)),
                         "pre_engine_analysis": pre_engine_analysis,
                         "engine_analysis": engine_analysis,
@@ -679,6 +856,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     snapshot, move_index = _puzzle_snapshots.pop()
                     _puzzle_board = snapshot.copy()
                     _puzzle_move_index = move_index
+                    self._serve_payload({"state": _puzzle_state()})
+                    return
+
+                if self.path == "/api/puzzle/reset":
+                    if _active_puzzle is None:
+                        raise ValueError("Start a puzzle first")
+                    _puzzle_board = chess.Board(_active_puzzle["fen"])
+                    _puzzle_move_index = 0
+                    _puzzle_snapshots = [(_puzzle_board.copy(), 0)]
                     self._serve_payload({"state": _puzzle_state()})
                     return
 
