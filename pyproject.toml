@@ -8,7 +8,7 @@ dependencies = [
     "rich",
     "textual",
     "watchdog",
-    "mcp[cli]",
+    "mcp[cli]<2",
     "zstandard",
 ]
 
