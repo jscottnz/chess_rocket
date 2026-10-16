@@ -165,6 +165,7 @@
   .move-num { color: var(--text-dim); min-width: 32px; text-align: right; margin-right: 8px; }
   .move-cell { min-width: 80px; display: inline-flex; align-items: baseline; gap: 4px; }
   .move-san { cursor: default; }
+  .move-review { padding: 2px 5px; font-size: .65rem; background: var(--surface2); }
   .badge { font-size: 0.7rem; font-weight: 700; border-radius: 3px; padding: 0 3px; }
   .badge-best { color: var(--green); }
   .badge-great { color: var(--light-green); }
@@ -228,6 +229,7 @@
   .chat-form .chat-input { flex: 1; resize: vertical; min-height: 38px; }
   .chat-options { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--text-dim); font-size: .78rem; }
   .chat-options input { accent-color: var(--accent); }
+  .better-moves-button { padding: 5px 8px; font-size: .75rem; background: var(--blue); }
   .move-pending { opacity: .6; pointer-events: none; }
   .lesson-controls { display: none; align-items: center; gap: 8px; margin-top: 10px; font-size: .8rem; color: var(--text-dim); }
   .lesson-controls.visible { display: flex; }
@@ -396,6 +398,7 @@
       <div class="chat-options">
         <label><input type="checkbox" id="show-next-hint"> Show next-move hints automatically</label>
         <label><input type="checkbox" id="explain-engine-move"> Explain why the coach moved</label>
+        <button type="button" class="better-moves-button" id="better-moves">Better moves</button>
       </div>
       <form class="chat-form" id="chat-form">
         <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask about the position..."></textarea>
@@ -489,6 +492,11 @@
       }
     });
     document.getElementById('chat-form').addEventListener('submit', sendChat);
+    document.getElementById('better-moves').addEventListener('click', () => requestBetterMoves());
+    document.getElementById('move-history').addEventListener('click', event => {
+      const review = event.target.closest('[data-review-ply]');
+      if (review) requestBetterMoves(Number(review.dataset.reviewPly), review);
+    });
     document.getElementById('chat-messages').addEventListener('click', event => {
       const jargonTarget = event.target.closest('[data-jargon-term]');
       if (jargonTarget) {
@@ -770,6 +778,8 @@
     if (endButton) endButton.textContent = state.puzzle_mode ? 'End puzzle' : 'End game';
     const copyPgnButton = document.getElementById('copy-pgn');
     if (copyPgnButton) copyPgnButton.disabled = Boolean(state.puzzle_mode);
+    const betterMovesButton = document.getElementById('better-moves');
+    if (betterMovesButton) betterMovesButton.disabled = Boolean(state.puzzle_mode);
   }
 
   function addChat(role, text, state, annotations, jargon, moveAnnotations) {
@@ -1145,6 +1155,25 @@
     finally { button.disabled = false; input.focus(); }
   }
 
+  async function requestBetterMoves(ply, trigger) {
+    if (movePending || puzzleMode) return;
+    const button = trigger || document.getElementById('better-moves');
+    if (!button) return;
+    button.disabled = true;
+    addChat('user', Number.isInteger(ply) ? 'Show better moves instead of that move.' : 'Show me the better moves here.');
+    try {
+      const result = await api('/api/game/better-moves', Number.isInteger(ply) ? {ply} : {});
+      addChat('assistant', result.reply, result.state, result.lesson && result.lesson.annotations, result.lesson && result.lesson.jargon, result.lesson && result.lesson.move_annotations);
+      applyLessonNotes(result.lesson);
+      setLesson(result.lesson);
+      renderState(result.state);
+    } catch (error) {
+      addChat('assistant', error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function startGame() {
     const button = document.getElementById('start-game');
     button.disabled = true;
@@ -1342,7 +1371,10 @@
         badgeHtml = '<span class="badge ' + b.cls + '">' + b.text + '</span>';
       }
     }
-    return '<span class="move-cell"><span class="move-san">' + esc(san) + '</span>' + badgeHtml + '</span>';
+    const reviewButton = annot && Number.isInteger(annot.ply)
+      ? '<button type="button" class="move-review" data-review-ply="' + annot.ply + '" title="Explain better moves from before ' + esc(san) + '">Review</button>'
+      : '';
+    return '<span class="move-cell"><span class="move-san">' + esc(san) + '</span>' + badgeHtml + reviewButton + '</span>';
   }
 
   function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }

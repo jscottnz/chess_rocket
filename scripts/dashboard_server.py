@@ -150,6 +150,46 @@ def _full_state(game_id: str) -> dict:
     return _game_service._build_game_state(game_id, game)
 
 
+def _historical_state(game_id: str, game: dict, ply: int) -> tuple[dict, str, dict | None]:
+    """Rebuild the exact position before a previously played move."""
+    moves = game["board"].move_stack
+    if ply < 0 or ply >= len(moves):
+        raise ValueError("That move is no longer in this game")
+    board = chess.Board(game["starting_fen"])
+    for move in moves[:ply]:
+        board.push(move)
+    played_move = board.san(moves[ply])
+    snapshot = dict(game)
+    snapshot["board"] = board
+    evaluation = next((item for item in game.get("move_evals", []) if item.get("ply") == ply), None)
+    return _game_service._build_game_state(game_id, snapshot), played_move, evaluation
+
+
+def _historical_review(game_id: str, game: dict, ply: int) -> dict:
+    """Use engine candidates to explain alternatives to one recorded player move."""
+    state, played_move, evaluation = _historical_state(game_id, game, ply)
+    analysis = _engine_analysis(game_id, chess.Board(state["fen"]))
+    lesson = _model_reply(
+        f"Review the earlier move {played_move}. Describe the most useful better moves "
+        "from that exact earlier position and what each idea accomplishes.",
+        state,
+        {
+            "move": played_move,
+            "classification": (evaluation or {}).get("classification"),
+            "cp_loss": (evaluation or {}).get("cp_loss"),
+            "best_move": (evaluation or {}).get("best_move_san"),
+            "engine_analysis": analysis,
+            "historical_review": True,
+        },
+    )
+    # The dashboard remains on the current board, so do not show overlays for
+    # an earlier position.
+    lesson["demo_moves"] = []
+    lesson["annotations"] = []
+    lesson["move_annotations"] = []
+    return {"state": _full_state(game_id), "reply": lesson["message"], "lesson": lesson}
+
+
 def _game_export(game_id: str) -> dict:
     """Return the current game in portable board-state and PGN formats."""
     game = _game_service._games.get(game_id)
@@ -424,6 +464,9 @@ def _model_reply(user_message: str, state: dict, move_context: dict | None = Non
         "or material win, say it is available now because of the reply and lead with that "
         "opportunity. If the player's earlier move still deserves correction, clearly say "
         "that the comparison belongs to the position before the reply. "
+        "When last_move_evaluation.historical_review is true, Position is an earlier "
+        "position reconstructed immediately before the reviewed move. Discuss candidate "
+        "moves from that earlier position only; do not describe it as the live board. "
         "When the player asks a direct chess question, answer that question first and "
         "do not frame the answer as feedback on an earlier move. In particular, never "
         "say 'A stronger choice was …' unless last_move_evaluation explicitly exists "
@@ -761,6 +804,41 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     _end_active_game()
                     _chat_history.clear()
                     self._serve_payload({"ended": True})
+                    return
+
+                if self.path == "/api/game/better-moves":
+                    if not _active_game_id:
+                        raise ValueError("Start a game first")
+                    game = _game_service._games.get(_active_game_id)
+                    if game is None:
+                        raise ValueError("Active game is no longer available")
+                    requested_ply = payload.get("ply")
+                    if requested_ply is not None:
+                        result = _historical_review(_active_game_id, game, int(requested_ply))
+                        _chat_history.extend([
+                            {"role": "user", "content": f"Review better moves for ply {requested_ply}."},
+                            {"role": "assistant", "content": result["reply"]},
+                        ])
+                        self._serve_payload(result)
+                        return
+                    state = _full_state(_active_game_id)
+                    analysis = _engine_analysis(_active_game_id)
+                    lesson = _validate_demo_line(
+                        _active_game_id,
+                        _model_reply(
+                            "Show the strongest current candidate moves and explain their plans, "
+                            "trade-offs, and what to watch for.",
+                            state,
+                            {"engine_analysis": analysis},
+                        ),
+                        state,
+                        analysis,
+                    )
+                    _chat_history.extend([
+                        {"role": "user", "content": "Show me better moves in this position."},
+                        {"role": "assistant", "content": lesson["message"]},
+                    ])
+                    self._serve_payload({"state": state, "reply": lesson["message"], "lesson": lesson})
                     return
 
                 if self.path == "/api/puzzle/end":

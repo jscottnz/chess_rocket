@@ -111,6 +111,7 @@ def _build_move_annotations(game: dict) -> list[dict]:
             "cp_loss": ev.get("cp_loss", 0),
             "ply": ev.get("ply", 0),
             "color": ev.get("color", "white"),
+            "best_move": ev.get("best_move_san", ""),
         })
     return annotations
 
