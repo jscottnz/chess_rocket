@@ -53,7 +53,11 @@
   .left-column { display: flex; flex-direction: column; gap: 10px; overflow: visible; }
   .board-col { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
   .board-wrapper { width: min(100%, calc(100vh - 355px)); aspect-ratio: 1; position: relative; margin: 0 auto; }
-  #board { width: 100% !important; height: auto !important; }
+  #board { width: 100% !important; height: auto !important; touch-action: none; }
+  html.board-dragging, html.board-dragging body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   /* Chessboard.js coordinates: make the file/rank labels readable on both square colors. */
   #board [class*="notation-"] {
     z-index: 2;
@@ -82,6 +86,8 @@
   .message-piece { fill: none; stroke: rgba(33, 150, 243, .58); stroke-width: .07; }
   .message-selected-square { fill: rgba(255, 193, 7, .28); stroke: rgba(255, 193, 7, .95); stroke-width: .08; }
   .message-selected-piece { fill: none; stroke: rgba(255, 193, 7, .95); stroke-width: .09; }
+  .tap-selected-square { fill: rgba(233, 69, 96, .24); stroke: rgba(233, 69, 96, .98); stroke-width: .09; }
+  .tap-selected-piece { fill: none; stroke: #fff; stroke-width: .1; }
   .message-move-arrow { fill: none; stroke-width: .09; stroke-linecap: round; opacity: .58; transition: opacity .12s, stroke-width .12s; }
   .message-move-arrow.white { stroke: #81c784; }
   .message-move-arrow.black { stroke: #ffab91; }
@@ -228,11 +234,20 @@
   .lesson-controls button { padding: 5px 9px; font-size: .75rem; }
   #lesson-title { flex: 1; }
   @media (max-width: 760px) {
-    .main { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow: visible; }
+    .main { display: flex; flex-direction: column; gap: 10px; height: auto; min-height: 100vh; overflow: visible; padding: 10px; }
+    /* Flatten the desktop columns so the playing flow remains visible without
+       scrolling past the coaching conversation and controls. */
+    .left-column, .right-column, .board-col { display: contents; }
+    .board-wrapper { order: 1; }
+    .chat-panel { order: 2; height: min(46vh, 420px); min-height: 300px; }
+    .board-info { order: 3; }
+    .capture-alert { order: 4; }
+    .stats-panels { order: 5; }
+    .notes-panel { order: 6; }
     .board-wrapper { width: min(100%, 72vh); }
-    .left-column { overflow: visible; }
+    .board-info { flex-wrap: wrap; gap: 6px; }
+    .board-actions { margin-left: 0; flex-wrap: wrap; }
     .stats-panels { overflow: visible; }
-    .right-column { height: auto; min-height: 760px; grid-template-columns: 1fr; grid-template-rows: minmax(220px, auto) minmax(480px, 1fr); grid-template-areas: "notes" "chat"; }
     .notes-input { min-height: 150px; }
   }
   @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
@@ -287,6 +302,7 @@
             <marker id="message-black-arrow-head" markerWidth="4" markerHeight="4" refX="3.2" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#ffab91"></path></marker>
           </defs>
           <g id="last-move-drawing"></g>
+          <g id="tap-selection"></g>
           <g id="message-highlights"></g>
           <g id="message-move-highlights"></g>
           <g id="overlay-drawing"></g>
@@ -428,6 +444,10 @@
   let jargonExplanation = null;
   let hoveredMoveAnnotation = null;
   let currentState = null;
+  let selectedTapSquare = null;
+  let suppressBoardClickUntil = 0;
+  let touchTapStart = null;
+  let deferBoardStateUntil = 0;
 
   function initBoard(orientation) {
     const main = document.getElementById('main-content');
@@ -438,16 +458,27 @@
       position: 'start',
       orientation: orientation || 'white',
       draggable: true,
-      onDrop: handleDrop,
+      onDragStart: startPieceDrag,
+      onDrop: finishPieceDrag,
+      onSnapEnd: () => setBoardDragScrolling(false),
       pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
     });
     window.addEventListener('resize', () => board.resize());
+    window.addEventListener('blur', () => setBoardDragScrolling(false));
+    const boardElement = document.getElementById('board');
+    boardElement.addEventListener('click', handleBoardTap);
+    // Chessboard.js turns every touch into a drag. Capture touch gestures before
+    // they reach it so taps consistently use the select-then-destination flow.
+    boardElement.addEventListener('touchstart', beginTouchTap, {capture: true, passive: false});
+    boardElement.addEventListener('touchmove', trackTouchTap, {capture: true, passive: false});
+    boardElement.addEventListener('touchend', finishTouchTap, {capture: true, passive: false});
+    boardElement.addEventListener('touchcancel', cancelTouchTap, {capture: true, passive: false});
     gameActive = true;
     loadNotes();
     document.getElementById('notes-save').addEventListener('click', saveNotes);
     document.getElementById('undo-move').addEventListener('click', undoMove);
     document.getElementById('copy-pgn').addEventListener('click', copyPgn);
-    document.getElementById('copy-fen').addEventListener('click', copyFen);
+    document.getElementById('copy-fen').addEventListener('click', copyFEN);
     document.getElementById('reset-puzzle').addEventListener('click', resetPuzzle);
     document.getElementById('end-game').addEventListener('click', endGame);
     document.getElementById('notes-add-explanation').addEventListener('click', addJargonExplanationToNotes);
@@ -720,11 +751,16 @@
     currentState = state;
     puzzleMode = Boolean(state.puzzle_mode);
     if (!gameActive) initBoard(state.player_color || 'white');
-    if (state.fen !== lastFen) { board.position(state.fen, true); lastFen = state.fen; }
+    if (state.fen !== lastFen) {
+      selectedTapSquare = null;
+      board.position(state.fen, true);
+      lastFen = state.fen;
+    }
     const expectedOrientation = state.player_color === 'black' ? 'black' : 'white';
     if (board.orientation() !== expectedOrientation) board.orientation(expectedOrientation);
     updatePanels(state);
     drawLastMove(state);
+    drawTapSelection();
     drawMessageMoveHighlights(window.lastMessageMoveAnnotations || [], hoveredMoveAnnotation);
     const undoButton = document.getElementById('undo-move');
     if (undoButton) undoButton.disabled = !state.move_list || state.move_list.length === 0 || movePending;
@@ -812,6 +848,122 @@
     const from = squarePoint(uci.slice(0, 2), board.orientation());
     const to = squarePoint(uci.slice(2, 4), board.orientation());
     group.innerHTML = `<line class="last-move-arrow" marker-end="url(#last-arrow-head)" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"></line>`;
+  }
+
+  function boardSquareFromElement(element) {
+    const square = element.closest('[class*="square-"]');
+    if (!square || !document.getElementById('board').contains(square)) return null;
+    const className = Array.from(square.classList).find(name => /^square-[a-h][1-8]$/.test(name));
+    return className ? className.slice(-2) : null;
+  }
+
+  function pieceAtSquare(fen, targetSquare) {
+    const placement = String(fen || '').split(' ')[0];
+    const rows = placement.split('/');
+    if (rows.length !== 8 || !/^[a-h][1-8]$/.test(targetSquare)) return null;
+    const rank = 8 - Number(targetSquare[1]);
+    let file = 0;
+    for (const char of rows[rank]) {
+      if (/\d/.test(char)) file += Number(char);
+      else {
+        if (file === targetSquare.charCodeAt(0) - 97) return char;
+        file += 1;
+      }
+    }
+    return null;
+  }
+
+  function isSideToMove(piece) {
+    if (!piece || !currentState || !currentState.fen) return false;
+    const turn = currentState.fen.split(' ')[1];
+    return turn === 'w' ? piece === piece.toUpperCase() : piece === piece.toLowerCase();
+  }
+
+  function clearTapSelection() {
+    selectedTapSquare = null;
+    drawTapSelection();
+  }
+
+  function drawTapSelection() {
+    const group = document.getElementById('tap-selection');
+    if (!group || !board || !selectedTapSquare) {
+      if (group) group.innerHTML = '';
+      return;
+    }
+    const point = squarePoint(selectedTapSquare, board.orientation());
+    group.innerHTML = `<rect class="tap-selected-square" x="${point.x - .5}" y="${point.y - .5}" width="1" height="1"></rect>` +
+      `<circle class="tap-selected-piece" cx="${point.x}" cy="${point.y}" r=".36"></circle>`;
+  }
+
+  function handleBoardTap(event) {
+    if (Date.now() < suppressBoardClickUntil || movePending) return;
+    const square = boardSquareFromElement(event.target);
+    handleBoardSquareTap(square);
+  }
+
+  function handleBoardSquareTap(square) {
+    if (movePending) return;
+    if (!square || !currentState || !currentState.fen) return;
+    const piece = pieceAtSquare(currentState.fen, square);
+    if (!selectedTapSquare) {
+      if (isSideToMove(piece)) {
+        selectedTapSquare = square;
+        drawTapSelection();
+      }
+      return;
+    }
+    if (square === selectedTapSquare) {
+      clearTapSelection();
+      return;
+    }
+    if (isSideToMove(piece)) {
+      selectedTapSquare = square;
+      drawTapSelection();
+      return;
+    }
+    const source = selectedTapSquare;
+    clearTapSelection();
+    handleDrop(source, square, true);
+  }
+
+  function matchingTouch(touches, identifier) {
+    return Array.from(touches).find(touch => touch.identifier === identifier);
+  }
+
+  function beginTouchTap(event) {
+    if (movePending || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    touchTapStart = {identifier: touch.identifier, x: touch.clientX, y: touch.clientY, moved: false};
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function trackTouchTap(event) {
+    if (!touchTapStart) return;
+    const touch = matchingTouch(event.touches, touchTapStart.identifier);
+    if (touch && Math.hypot(touch.clientX - touchTapStart.x, touch.clientY - touchTapStart.y) > 12) {
+      touchTapStart.moved = true;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function finishTouchTap(event) {
+    if (!touchTapStart) return;
+    const touch = matchingTouch(event.changedTouches, touchTapStart.identifier);
+    const tap = touchTapStart;
+    touchTapStart = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (touch && !tap.moved) {
+      handleBoardSquareTap(boardSquareFromElement(document.elementFromPoint(touch.clientX, touch.clientY)));
+    }
+  }
+
+  function cancelTouchTap(event) {
+    touchTapStart = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
   }
 
   function drawMessageHighlights(state, annotations) {
@@ -904,8 +1056,26 @@
     }, 1200);
   }
 
-  function handleDrop(source, target) {
+  function showPlayerMove(source, target) {
+    // A tap-to-move does not go through Chessboard.js's drag renderer, so
+    // animate it explicitly before waiting for the coach's reply.
+    if (board) board.move(`${source}-${target}`);
+  }
+
+  function waitForPlayerMoveAnimation() {
+    const remaining = deferBoardStateUntil - Date.now();
+    return remaining > 0 ? new Promise(resolve => window.setTimeout(resolve, remaining)) : Promise.resolve();
+  }
+
+  function handleDrop(source, target, animatePlayerMove = false) {
+    if (!/^[a-h][1-8]$/.test(source) || !/^[a-h][1-8]$/.test(target) || source === target) {
+      return 'snapback';
+    }
     if (movePending) return 'snapback';
+    if (animatePlayerMove) showPlayerMove(source, target);
+    // Do not let a poll or fast engine reply replace the board before the
+    // player's move has had time to render.
+    deferBoardStateUntil = Date.now() + 260;
     movePending = true;
     document.getElementById('board').classList.add('move-pending');
     api(puzzleMode ? '/api/puzzle/move' : '/api/game/move', {
@@ -914,7 +1084,8 @@
         show_hint: document.getElementById('show-next-hint').checked,
         explain_engine_move: document.getElementById('explain-engine-move').checked,
       }),
-    }).then(result => {
+    }).then(async result => {
+      await waitForPlayerMoveAnimation();
       renderState(result.state);
       if (puzzleMode) {
         addChat('assistant', result.reply, result.state);
@@ -932,6 +1103,27 @@
     });
     // Keep the locally dragged piece at the target while the request is pending.
     return undefined;
+  }
+
+  function setBoardDragScrolling(disabled) {
+    document.documentElement.classList.toggle('board-dragging', disabled);
+  }
+
+  function startPieceDrag() {
+    if (movePending) return false;
+    setBoardDragScrolling(true);
+    return true;
+  }
+
+  function finishPieceDrag(source, target) {
+    setBoardDragScrolling(false);
+    // Chessboard.js reports a simple tap as a no-op drop. Let the click event
+    // below select the piece instead of sending an invalid UCI move.
+    if (!/^[a-h][1-8]$/.test(source) || !/^[a-h][1-8]$/.test(target) || source === target) {
+      return 'snapback';
+    }
+    suppressBoardClickUntil = Date.now() + 250;
+    return handleDrop(source, target);
   }
 
   async function sendChat(event) {
@@ -1166,7 +1358,7 @@
       const resp = await fetch('/api/game');
       if (!resp.ok) return;
       const state = await resp.json();
-      if (state && state.fen) renderState(state);
+      if (state && state.fen && Date.now() >= deferBoardStateUntil) renderState(state);
     } catch (e) {
       // Server might be down, just retry
     }

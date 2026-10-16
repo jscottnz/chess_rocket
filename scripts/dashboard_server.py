@@ -987,11 +987,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Chess Rocket Dashboard Server")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8088, help="Port (default: 8088)")
     args = parser.parse_args()
 
-    server = http.server.HTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    _log(f"Chess Rocket Dashboard: http://localhost:{args.port}")
+    server = http.server.HTTPServer((args.host, args.port), DashboardHandler)
+    display_host = "localhost" if args.host == "127.0.0.1" else args.host
+    _log(f"Chess Rocket Dashboard: http://{display_host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
